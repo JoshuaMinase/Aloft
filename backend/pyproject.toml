@@ -4,7 +4,10 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
-ignore = ["E501"]
+# E501: handled by line-length above.
+# B008: Depends(...) as a default argument is FastAPI's actual intended
+# pattern, not the mutable-default-argument bug this rule is meant to catch.
+ignore = ["E501", "B008"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["app"]
