@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     # into the User-Agent header on every outbound API call.
     app_contact_email: str = "you@example.com"
 
+    mongodb_uri: str = "mongodb://localhost:27017"
+    mongodb_db_name: str = "aloft"
+
     corridor_width_km: float = 100.0
 
 
