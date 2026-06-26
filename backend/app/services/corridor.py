@@ -89,6 +89,31 @@ def _great_circle_points(
     return points
 
 
+def sample_points_by_spacing(
+    departure: tuple[float, float],
+    arrival: tuple[float, float],
+    spacing_km: float,
+) -> list[tuple[float, float]]:
+    """Evenly spaced (lat, lng) points along the great-circle route, spaced by
+    actual distance rather than a fixed count.
+
+    build_corridor's num_points is chosen for a smooth polygon shape and
+    doesn't care about real-world spacing. This is for callers like
+    poi_service.py that need consistent km-spacing between query points
+    regardless of whether the route is 500km or 5,000km.
+    """
+    if spacing_km <= 0:
+        raise ValueError(f"spacing_km must be positive, got {spacing_km}")
+
+    dep_lat, dep_lng = departure
+    arr_lat, arr_lng = arrival
+
+    _, _, total_distance_m = _GEOD.inv(dep_lng, dep_lat, arr_lng, arr_lat)
+    num_points = max(2, round(total_distance_m / (spacing_km * 1000)) + 1)
+
+    return _great_circle_points(dep_lat, dep_lng, arr_lat, arr_lng, num_points)
+
+
 def _planar_transformers(center_lat: float, center_lng: float):
     """Build to/from transformers for an azimuthal-equidistant CRS centered on
     the route's midpoint -- lets us buffer in real meters regardless of where

@@ -7,6 +7,7 @@ from app.services.corridor import (
     build_corridor,
     corridor_to_geojson,
     point_in_corridor,
+    sample_points_by_spacing,
 )
 
 # Addis Ababa Bole (ADD) -> Dubai (DXB): a real long-haul Ethiopian Airlines route.
@@ -84,3 +85,25 @@ def test_point_in_corridor_handles_lat_lng_order_correctly():
     mid_lng, mid_lat = GEOD.npts(ADD[1], ADD[0], DXB[1], DXB[0], 1)[0]
     assert corridor.contains(Point(mid_lng, mid_lat))
     assert point_in_corridor(corridor, mid_lat, mid_lng)
+
+
+
+def test_sample_points_by_spacing_endpoints_match_departure_and_arrival():
+    points = sample_points_by_spacing(ADD, DXB, spacing_km=200)
+    assert points[0] == ADD
+    assert points[-1] == DXB
+
+
+def test_sample_points_by_spacing_keeps_consistent_gaps():
+    spacing_km = 200
+    points = sample_points_by_spacing(ADD, DXB, spacing_km=spacing_km)
+    for (lat1, lng1), (lat2, lng2) in zip(points, points[1:], strict=False):
+        _, _, dist_m = GEOD.inv(lng1, lat1, lng2, lat2)
+        # Should be close to the requested spacing, not exact -- the point
+        # count is rounded to fit the route evenly.
+        assert dist_m / 1000 < spacing_km * 1.25
+
+
+def test_sample_points_by_spacing_rejects_non_positive_spacing():
+    with pytest.raises(ValueError):
+        sample_points_by_spacing(ADD, DXB, spacing_km=0)
