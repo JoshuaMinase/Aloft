@@ -1,8 +1,3 @@
-"""
-FastAPI app entrypoint. Wires together the lifespan (DB connection, shared
-HTTP client) and routers -- no business logic lives here, on purpose.
-"""
-
 from __future__ import annotations
 
 import logging
@@ -26,13 +21,9 @@ logger = logging.getLogger("aloft.main")
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await connect_to_mongo()
-    # One shared connection pool for every external API call this app
-    # makes, reused across requests -- not a new client created per call.
     app.state.http_client = httpx.AsyncClient()
     logger.info("Aloft backend started")
-
     yield
-
     await app.state.http_client.aclose()
     await close_mongo_connection()
     logger.info("Aloft backend shut down")

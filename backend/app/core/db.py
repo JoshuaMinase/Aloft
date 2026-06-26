@@ -1,12 +1,3 @@
-"""
-MongoDB connection, kept in one place on purpose.
-
-The client is created lazily -- via connect_to_mongo(), called once from
-main.py's startup -- never at import time. That's what lets every other
-module import app.* freely without needing a live database, and what lets
-tests pass in a mongomock database instead of a real one.
-"""
-
 from __future__ import annotations
 
 import logging
@@ -22,11 +13,8 @@ _db: AsyncIOMotorDatabase | None = None
 
 
 def get_db() -> AsyncIOMotorDatabase:
-    """Returns the active database handle. Raises if connect_to_mongo() hasn't run."""
     if _db is None:
-        raise RuntimeError(
-            "Database not connected. Call connect_to_mongo() at app startup first."
-        )
+        raise RuntimeError("Database not connected. Call connect_to_mongo() at app startup first.")
     return _db
 
 
@@ -48,13 +36,5 @@ async def close_mongo_connection() -> None:
 
 
 async def ensure_indexes(db: AsyncIOMotorDatabase) -> None:
-    """Indexes this app depends on for correctness or performance.
-
-    Public (not prefixed with _) because tests call this directly against
-    a mongomock database -- the index behavior itself is part of what
-    needs verifying, not just an implementation detail.
-    """
     await db.pois.create_index([("location", "2dsphere")])
-    # unique + sparse: source_id is what save_pois() upserts against to
-    # avoid storing the same Wikipedia page twice.
     await db.pois.create_index("source_id", unique=True, sparse=True)
