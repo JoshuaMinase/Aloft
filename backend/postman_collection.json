@@ -1,0 +1,96 @@
+{
+  "info": {
+    "name": "Aloft API",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "base_url", "value": "http://localhost:8000" }
+  ],
+  "item": [
+    {
+      "name": "Health Check",
+      "request": {
+        "method": "GET",
+        "url": "{{base_url}}/health"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('status is 200', () => pm.response.to.have.status(200));",
+              "pm.test('reports ok', () => pm.expect(pm.response.json().status).to.eql('ok'));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Discover POIs - Addis Ababa to Dubai",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "url": "{{base_url}}/routes/pois",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"departure\": {\"lat\": 8.9806, \"lng\": 38.7992},\n  \"arrival\": {\"lat\": 25.2532, \"lng\": 55.3657},\n  \"width_km\": 20\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('status is 200', () => pm.response.to.have.status(200));",
+              "pm.test('found at least one POI', () => pm.expect(pm.response.json().pois_found).to.be.above(0));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Discover POIs - rerun (should not duplicate)",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "url": "{{base_url}}/routes/pois",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"departure\": {\"lat\": 8.9806, \"lng\": 38.7992},\n  \"arrival\": {\"lat\": 25.2532, \"lng\": 55.3657},\n  \"width_km\": 20\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('newly_inserted is 0 on rerun', () => pm.expect(pm.response.json().pois_newly_inserted).to.eql(0));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Discover POIs - invalid (same point) expects 400",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "url": "{{base_url}}/routes/pois",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"departure\": {\"lat\": 8.9806, \"lng\": 38.7992},\n  \"arrival\": {\"lat\": 8.9806, \"lng\": 38.7992},\n  \"width_km\": 20\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('status is 400', () => pm.response.to.have.status(400));"
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}
