@@ -12,6 +12,8 @@ class Settings(BaseSettings):
     mongodb_uri: str = "mongodb://localhost:27017"
     mongodb_db_name: str = "aloft"
     corridor_width_km: float = 100.0
+    groq_api_key: str | None = None
+    groq_model: str = "openai/gpt-oss-120b"
 
 
 @lru_cache

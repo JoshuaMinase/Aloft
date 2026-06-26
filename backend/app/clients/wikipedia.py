@@ -52,6 +52,26 @@ async def geosearch(
         "gslimit": limit,
         "format": "json",
     }
+    response = await _request_with_retries(client, params, log_context=f"geosearch near ({lat}, {lng})")
+    return _parse_geosearch_response(response, lat, lng)
+
+
+async def get_summary(client: httpx.AsyncClient, title: str) -> str:
+    params = {
+        "action": "query",
+        "prop": "extracts",
+        "exintro": 1,
+        "explaintext": 1,
+        "titles": title,
+        "format": "json",
+    }
+    response = await _request_with_retries(client, params, log_context=f"get_summary for '{title}'")
+    return _parse_summary_response(response, title)
+
+
+async def _request_with_retries(
+    client: httpx.AsyncClient, params: dict, *, log_context: str
+) -> httpx.Response:
     headers = {"User-Agent": _user_agent()}
     timeout = httpx.Timeout(connect=5.0, read=10.0, write=5.0, pool=5.0)
 
@@ -65,32 +85,29 @@ async def geosearch(
         except httpx.TransportError as exc:
             last_error = exc
             logger.warning(
-                "Wikipedia geosearch network error near (%s, %s), attempt %d/%d: %s",
-                lat, lng, attempt, _MAX_ATTEMPTS, exc,
+                "Wikipedia %s network error, attempt %d/%d: %s",
+                log_context, attempt, _MAX_ATTEMPTS, exc,
             )
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code not in _RETRYABLE_STATUS_CODES:
                 raise WikipediaClientError(
                     f"Wikipedia returned non-retryable status "
-                    f"{exc.response.status_code} near ({lat}, {lng})"
+                    f"{exc.response.status_code} for {log_context}"
                 ) from exc
             last_error = exc
             logger.warning(
-                "Wikipedia geosearch got retryable status %d near (%s, %s), attempt %d/%d",
-                exc.response.status_code, lat, lng, attempt, _MAX_ATTEMPTS,
+                "Wikipedia %s got retryable status %d, attempt %d/%d",
+                log_context, exc.response.status_code, attempt, _MAX_ATTEMPTS,
             )
         else:
-            return _parse_geosearch_response(response, lat, lng)
+            return response
 
         if attempt < _MAX_ATTEMPTS:
             await asyncio.sleep(_BACKOFF_BASE_SECONDS * (2 ** (attempt - 1)))
 
-    logger.error(
-        "Wikipedia geosearch failed after %d attempts near (%s, %s)",
-        _MAX_ATTEMPTS, lat, lng,
-    )
+    logger.error("Wikipedia %s failed after %d attempts", log_context, _MAX_ATTEMPTS)
     raise WikipediaClientError(
-        f"geosearch failed after {_MAX_ATTEMPTS} attempts near ({lat}, {lng})"
+        f"{log_context} failed after {_MAX_ATTEMPTS} attempts"
     ) from last_error
 
 
@@ -118,3 +135,15 @@ def _parse_geosearch_response(response: httpx.Response, lat: float, lng: float) 
                 lat, lng, exc,
             )
     return pois
+
+
+def _parse_summary_response(response: httpx.Response, title: str) -> str:
+    pages = response.json().get("query", {}).get("pages", {})
+    if not pages:
+        logger.warning("Wikipedia get_summary for '%s' returned no pages", title)
+        return ""
+    page = next(iter(pages.values()))
+    if "missing" in page:
+        logger.warning("Wikipedia get_summary: '%s' does not exist", title)
+        return ""
+    return page.get("extract", "")

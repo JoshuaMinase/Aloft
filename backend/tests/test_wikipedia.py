@@ -8,6 +8,7 @@ from app.clients.wikipedia import (
     WIKIPEDIA_API_URL,
     WikipediaClientError,
     geosearch,
+    get_summary,
 )
 
 MOCK_GEOSEARCH_RESPONSE = {
@@ -155,3 +156,89 @@ async def test_geosearch_does_not_retry_non_retryable_errors():
                 await geosearch(client, lat=9.02, lng=38.76)
 
     assert route.call_count == 1  # a 404 won't change on retry -- fail fast
+
+
+
+MOCK_SUMMARY_RESPONSE = {
+    "query": {
+        "pages": {
+            "12345": {
+                "pageid": 12345,
+                "title": "Holy Trinity Cathedral, Addis Ababa",
+                "extract": "Holy Trinity Cathedral is the second largest church in Ethiopia, "
+                "built to commemorate Ethiopia's liberation from Italian occupation.",
+            }
+        }
+    }
+}
+
+MOCK_MISSING_PAGE_RESPONSE = {
+    "query": {"pages": {"-1": {"ns": 0, "title": "Some Nonexistent Title", "missing": ""}}}
+}
+
+
+@pytest.mark.asyncio
+async def test_get_summary_returns_extract_text():
+    async with httpx.AsyncClient() as client:
+        with respx.mock:
+            respx.get(WIKIPEDIA_API_URL).mock(
+                return_value=httpx.Response(200, json=MOCK_SUMMARY_RESPONSE)
+            )
+            summary = await get_summary(client, "Holy Trinity Cathedral, Addis Ababa")
+
+    assert "second largest church in Ethiopia" in summary
+
+
+@pytest.mark.asyncio
+async def test_get_summary_returns_empty_string_for_missing_page():
+    async with httpx.AsyncClient() as client:
+        with respx.mock:
+            respx.get(WIKIPEDIA_API_URL).mock(
+                return_value=httpx.Response(200, json=MOCK_MISSING_PAGE_RESPONSE)
+            )
+            summary = await get_summary(client, "Some Nonexistent Title")
+
+    assert summary == ""
+
+
+@pytest.mark.asyncio
+async def test_get_summary_sends_correct_params():
+    async with httpx.AsyncClient() as client:
+        with respx.mock:
+            route = respx.get(WIKIPEDIA_API_URL).mock(
+                return_value=httpx.Response(200, json=MOCK_SUMMARY_RESPONSE)
+            )
+            await get_summary(client, "Holy Trinity Cathedral, Addis Ababa")
+
+    sent = route.calls[0].request
+    assert sent.url.params["prop"] == "extracts"
+    assert sent.url.params["titles"] == "Holy Trinity Cathedral, Addis Ababa"
+    assert sent.url.params["exintro"] == "1"
+    assert sent.url.params["explaintext"] == "1"
+
+
+@pytest.mark.asyncio
+async def test_get_summary_retries_on_503_then_succeeds():
+    async with httpx.AsyncClient() as client:
+        with respx.mock:
+            route = respx.get(WIKIPEDIA_API_URL).mock(
+                side_effect=[
+                    httpx.Response(503),
+                    httpx.Response(200, json=MOCK_SUMMARY_RESPONSE),
+                ]
+            )
+            summary = await get_summary(client, "Holy Trinity Cathedral, Addis Ababa")
+
+    assert route.call_count == 2
+    assert "second largest church" in summary
+
+
+@pytest.mark.asyncio
+async def test_get_summary_raises_after_exhausting_retries():
+    async with httpx.AsyncClient() as client:
+        with respx.mock:
+            route = respx.get(WIKIPEDIA_API_URL).mock(return_value=httpx.Response(503))
+            with pytest.raises(WikipediaClientError):
+                await get_summary(client, "Anything")
+
+    assert route.call_count == 3
