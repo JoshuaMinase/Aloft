@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pydantic import BaseModel
 
-from app.core.db import get_db
+from app.core.dependencies import get_database, get_http_client
 from app.services.poi_repository import save_pois
 from app.services.poi_service import find_pois_along_corridor
 
@@ -26,14 +26,6 @@ class DiscoverPoisRequest(BaseModel):
 class DiscoverPoisResponse(BaseModel):
     pois_found: int
     pois_newly_inserted: int
-
-
-def get_http_client(request: Request) -> httpx.AsyncClient:
-    return request.app.state.http_client
-
-
-def get_database() -> AsyncIOMotorDatabase:
-    return get_db()
 
 
 @router.post("/pois", response_model=DiscoverPoisResponse)

@@ -19,3 +19,11 @@ async def save_pois(db: AsyncIOMotorDatabase, pois: list[RawPoi]) -> int:
         if result.upserted_id is not None:
             inserted_count += 1
     return inserted_count
+
+
+async def get_poi(db: AsyncIOMotorDatabase, source_id: str) -> Poi | None:
+    doc = await db.pois.find_one({"source_id": source_id})
+    if doc is None:
+        return None
+    doc.pop("_id", None)
+    return Poi(**doc)

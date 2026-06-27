@@ -9,8 +9,8 @@ from mongomock_motor import AsyncMongoMockClient
 
 from app.clients.wikipedia import WIKIPEDIA_API_URL
 from app.core.db import ensure_indexes
+from app.core.dependencies import get_database, get_http_client
 from app.main import app
-from app.routers.pois import get_database, get_http_client
 
 ADD = {"lat": 8.9806, "lng": 38.7992}
 DXB = {"lat": 25.2532, "lng": 55.3657}

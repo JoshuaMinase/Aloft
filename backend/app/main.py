@@ -9,7 +9,7 @@ from fastapi import FastAPI
 
 from app.core.config import get_settings
 from app.core.db import close_mongo_connection, connect_to_mongo
-from app.routers import pois
+from app.routers import pois, stories
 
 logging.basicConfig(
     level=getattr(logging, get_settings().log_level.upper(), logging.INFO),
@@ -31,6 +31,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(title="Aloft", lifespan=lifespan)
 app.include_router(pois.router)
+app.include_router(stories.router)
 
 
 @app.get("/health")
