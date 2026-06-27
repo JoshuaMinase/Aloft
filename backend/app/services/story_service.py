@@ -1,0 +1,64 @@
+from __future__ import annotations
+
+import httpx
+
+from app.clients.groq import chat_completion
+from app.clients.wikipedia import get_summary
+from app.core.config import get_settings
+from app.models.story import Story
+
+_MIN_SUMMARY_LENGTH = 40
+
+_LANGUAGE_NAMES = {
+    "en": "English",
+    "am": "Amharic",
+    "ar": "Arabic",
+    "fr": "French",
+}
+
+_STYLE_INSTRUCTION = (
+    "You are narrating for an app where passengers hear a short, vivid story "
+    "about the place they are currently flying over. Write like a documentary "
+    "narrator revealing something extraordinary -- warm, a little dramatic, "
+    "with a thoughtful beat before the key detail. Never just list facts as "
+    "a summary. Write 2-3 sentences, no more. Do not address the listener "
+    "directly with phrases like 'you are flying over' -- narrate the place "
+    "itself, not the act of flying over it."
+)
+
+
+class InsufficientFactsError(Exception):
+    """Raised when there isn't enough real factual material to generate an honest story."""
+
+
+async def generate_story(
+    client: httpx.AsyncClient,
+    poi_source_id: str,
+    poi_name: str,
+    language: str = "en",
+) -> Story:
+    summary = await get_summary(client, poi_name)
+    if len(summary.strip()) < _MIN_SUMMARY_LENGTH:
+        raise InsufficientFactsError(
+            f"No usable Wikipedia summary for '{poi_name}' ({len(summary.strip())} chars)"
+            " -- refusing to generate a story from the name alone."
+        )
+
+    messages = _build_prompt(poi_name, summary, language)
+    text = await chat_completion(client, messages, temperature=0.8, max_tokens=300)
+
+    return Story(
+        poi_source_id=poi_source_id,
+        language=language,
+        text_content=text.strip(),
+        style_prompt=_STYLE_INSTRUCTION,
+        model_version=get_settings().groq_model,
+    )
+
+
+def _build_prompt(poi_name: str, summary: str, language: str) -> list[dict[str, str]]:
+    language_name = _LANGUAGE_NAMES.get(language, language)
+    return [
+        {"role": "system", "content": f"{_STYLE_INSTRUCTION} Write entirely in {language_name}."},
+        {"role": "user", "content": f"Place: {poi_name}\n\nFacts to draw from:\n{summary}"},
+    ]

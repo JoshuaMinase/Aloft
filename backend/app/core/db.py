@@ -38,3 +38,4 @@ async def close_mongo_connection() -> None:
 async def ensure_indexes(db: AsyncIOMotorDatabase) -> None:
     await db.pois.create_index([("location", "2dsphere")])
     await db.pois.create_index("source_id", unique=True, sparse=True)
+    await db.stories.create_index([("poi_source_id", 1), ("language", 1)], unique=True)
