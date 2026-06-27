@@ -15,6 +15,8 @@ class Settings(BaseSettings):
     corridor_width_km: float = 100.0
     groq_api_key: SecretStr | None = None
     groq_model: str = "llama3-70b-8192"
+    tts_language_code: str = "en-US"
+    tts_voice_name: str = "en-US-Wavenet-D"
 
 
 @lru_cache
