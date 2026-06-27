@@ -39,7 +39,7 @@ async def chat_completion(
         "max_completion_tokens": max_tokens,
     }
     headers = {
-        "Authorization": f"Bearer {settings.groq_api_key}",
+        "Authorization": f"Bearer {settings.groq_api_key.get_secret_value()}",
         "Content-Type": "application/json",
     }
     timeout = httpx.Timeout(connect=5.0, read=30.0, write=5.0, pool=5.0)

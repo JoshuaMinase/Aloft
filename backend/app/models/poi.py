@@ -12,7 +12,6 @@ class Poi(BaseModel):
     location: dict  # GeoJSON Point: {"type": "Point", "coordinates": [lng, lat]}
     source: str
     source_id: str
-    category: str | None = None
     image_refs: list[str] = Field(default_factory=list)
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
@@ -26,4 +25,4 @@ class Poi(BaseModel):
         )
 
     def to_mongo_dict(self) -> dict:
-        return self.model_dump()
+        return self.model_dump(mode="json")

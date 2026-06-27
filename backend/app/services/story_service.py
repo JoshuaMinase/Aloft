@@ -9,11 +9,15 @@ from app.models.story import Story
 
 _MIN_SUMMARY_LENGTH = 40
 
-_LANGUAGE_NAMES = {
+_LANGUAGE_NAMES: dict[str, str] = {
     "en": "English",
     "am": "Amharic",
     "ar": "Arabic",
     "fr": "French",
+    "de": "German",
+    "es": "Spanish",
+    "zh": "Chinese",
+    "hi": "Hindi",
 }
 
 _STYLE_INSTRUCTION = (
@@ -31,12 +35,25 @@ class InsufficientFactsError(Exception):
     """Raised when there isn't enough real factual material to generate an honest story."""
 
 
+class UnsupportedLanguageError(ValueError):
+    """Raised when the requested language code is not supported."""
+
+
+def supported_languages() -> list[str]:
+    return list(_LANGUAGE_NAMES.keys())
+
+
 async def generate_story(
     client: httpx.AsyncClient,
     poi_source_id: str,
     poi_name: str,
     language: str = "en",
 ) -> Story:
+    if language not in _LANGUAGE_NAMES:
+        raise UnsupportedLanguageError(
+            f"Unsupported language '{language}'. Supported: {', '.join(_LANGUAGE_NAMES)}"
+        )
+
     summary = await get_summary(client, poi_name)
     if len(summary.strip()) < _MIN_SUMMARY_LENGTH:
         raise InsufficientFactsError(
@@ -51,13 +68,12 @@ async def generate_story(
         poi_source_id=poi_source_id,
         language=language,
         text_content=text.strip(),
-        style_prompt=_STYLE_INSTRUCTION,
         model_version=get_settings().groq_model,
     )
 
 
 def _build_prompt(poi_name: str, summary: str, language: str) -> list[dict[str, str]]:
-    language_name = _LANGUAGE_NAMES.get(language, language)
+    language_name = _LANGUAGE_NAMES[language]
     return [
         {"role": "system", "content": f"{_STYLE_INSTRUCTION} Write entirely in {language_name}."},
         {"role": "user", "content": f"Place: {poi_name}\n\nFacts to draw from:\n{summary}"},

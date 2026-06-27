@@ -1,4 +1,4 @@
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -6,6 +6,7 @@ import pytest
 import respx
 from fastapi.testclient import TestClient
 from mongomock_motor import AsyncMongoMockClient
+from pydantic import SecretStr
 
 from app.clients.groq import GROQ_API_URL
 from app.clients.wikipedia import WIKIPEDIA_API_URL, RawPoi
@@ -54,7 +55,7 @@ def no_real_sleep():
 
 @pytest.fixture(autouse=True)
 def fake_groq_key(monkeypatch):
-    fake_settings = type("S", (), {"groq_api_key": "test-key", "groq_model": "test-model"})()
+    fake_settings = type("S", (), {"groq_api_key": SecretStr("test-key"), "groq_model": "test-model"})()
     monkeypatch.setattr("app.clients.groq.get_settings", lambda: fake_settings)
     monkeypatch.setattr("app.services.story_service.get_settings", lambda: fake_settings)
 
@@ -68,9 +69,15 @@ async def mongomock_db():
 
 
 @pytest.fixture
-def test_client(mongomock_db) -> Iterator[TestClient]:
+async def shared_http_client() -> AsyncIterator[httpx.AsyncClient]:
+    async with httpx.AsyncClient() as client:
+        yield client
+
+
+@pytest.fixture
+def test_client(mongomock_db, shared_http_client) -> Iterator[TestClient]:
     app.dependency_overrides[get_database] = lambda: mongomock_db
-    app.dependency_overrides[get_http_client] = lambda: httpx.AsyncClient()
+    app.dependency_overrides[get_http_client] = lambda: shared_http_client
     yield TestClient(app)
     app.dependency_overrides.clear()
 
@@ -131,3 +138,29 @@ async def test_create_story_accepts_language_query_param(test_client, mongomock_
     assert response.json()["language"] == "am"
     sent_body = groq_route.calls[0].request.content.decode()
     assert "Amharic" in sent_body
+
+
+@pytest.mark.asyncio
+async def test_create_story_returns_cached_story_without_calling_groq(test_client, mongomock_db):
+    """Second call must return the cached story and not hit Groq at all."""
+    await save_pois(mongomock_db, [CATHEDRAL_RAW])
+
+    with respx.mock:
+        respx.get(WIKIPEDIA_API_URL).mock(
+            return_value=httpx.Response(200, json=CATHEDRAL_SUMMARY)
+        )
+        groq_route = respx.post(GROQ_API_URL).mock(
+            return_value=httpx.Response(200, json=GENERATED_TEXT)
+        )
+        test_client.post("/pois/wikipedia:1001/story")
+        response = test_client.post("/pois/wikipedia:1001/story")
+
+    assert response.status_code == 200
+    assert groq_route.call_count == 1  # Groq called exactly once, not twice
+
+
+def test_create_story_400_for_unsupported_language(test_client):
+    response = test_client.post("/pois/wikipedia:9999/story?language=xx")
+
+    assert response.status_code == 400
+    assert "Unsupported language" in response.json()["detail"]

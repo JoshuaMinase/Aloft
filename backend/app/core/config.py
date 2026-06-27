@@ -1,5 +1,6 @@
 from functools import lru_cache
 
+from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -12,8 +13,8 @@ class Settings(BaseSettings):
     mongodb_uri: str = "mongodb://localhost:27017"
     mongodb_db_name: str = "aloft"
     corridor_width_km: float = 100.0
-    groq_api_key: str | None = None
-    groq_model: str = "openai/gpt-oss-120b"
+    groq_api_key: SecretStr | None = None
+    groq_model: str = "llama3-70b-8192"
 
 
 @lru_cache

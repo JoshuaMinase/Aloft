@@ -19,7 +19,6 @@ def _make_story(**overrides) -> Story:
         "poi_source_id": "wikipedia:1001",
         "language": "en",
         "text_content": "A cathedral rises above the hills.",
-        "style_prompt": "dramatic narrator style",
         "model_version": "test-model",
     }
     defaults.update(overrides)

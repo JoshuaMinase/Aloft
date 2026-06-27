@@ -3,10 +3,15 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import pytest
 import respx
+from pydantic import SecretStr
 
 from app.clients.groq import GROQ_API_URL
 from app.clients.wikipedia import WIKIPEDIA_API_URL
-from app.services.story_service import InsufficientFactsError, generate_story
+from app.services.story_service import (
+    InsufficientFactsError,
+    UnsupportedLanguageError,
+    generate_story,
+)
 
 CATHEDRAL_SUMMARY = {
     "query": {
@@ -40,8 +45,7 @@ def no_real_sleep():
 
 @pytest.fixture(autouse=True)
 def fake_groq_key(monkeypatch):
-    fake_settings = type("S", (), {"groq_api_key": "test-key", "groq_model": "test-model"})()
-    # Both modules import get_settings independently, so both need patching.
+    fake_settings = type("S", (), {"groq_api_key": SecretStr("test-key"), "groq_model": "test-model"})()
     monkeypatch.setattr("app.clients.groq.get_settings", lambda: fake_settings)
     monkeypatch.setattr("app.services.story_service.get_settings", lambda: fake_settings)
 
@@ -105,3 +109,10 @@ async def test_generate_story_sends_facts_and_language_in_prompt():
     sent_body = groq_route.calls[0].request.content.decode()
     assert "second largest church" in sent_body
     assert "Amharic" in sent_body
+
+
+@pytest.mark.asyncio
+async def test_generate_story_rejects_unsupported_language():
+    async with httpx.AsyncClient() as client:
+        with pytest.raises(UnsupportedLanguageError, match="Unsupported language 'xx'"):
+            await generate_story(client, poi_source_id="wikipedia:1001", poi_name="Anywhere", language="xx")
