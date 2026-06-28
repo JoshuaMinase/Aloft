@@ -17,6 +17,8 @@ class Settings(BaseSettings):
     groq_model: str = "llama3-70b-8192"
     tts_language_code: str = "en-US"
     tts_voice_name: str = "en-US-Wavenet-D"
+    audio_storage_dir: str = "./audio_storage"
+    aviationstack_api_key: str | None = None
 
 
 @lru_cache
