@@ -8,6 +8,7 @@ from app.clients.wikipedia import (
     WIKIPEDIA_API_URL,
     WikipediaClientError,
     geosearch,
+    get_images,
     get_summary,
 )
 
@@ -242,3 +243,170 @@ async def test_get_summary_raises_after_exhausting_retries():
                 await get_summary(client, "Anything")
 
     assert route.call_count == 3
+
+
+# ---------------------------------------------------------------------------
+# get_images tests
+# ---------------------------------------------------------------------------
+
+LEAD_IMAGE_RESPONSE = {
+    "query": {
+        "pages": {
+            "12345": {
+                "pageid": 12345,
+                "title": "Holy Trinity Cathedral, Addis Ababa",
+                "original": {
+                    "source": "https://upload.wikimedia.org/commons/cathedral_lead.jpg",
+                    "width": 1200,
+                    "height": 800,
+                },
+            }
+        }
+    }
+}
+
+NO_LEAD_IMAGE_RESPONSE = {
+    "query": {"pages": {"12345": {"pageid": 12345, "title": "Some Article"}}}
+}
+
+GALLERY_RESPONSE = {
+    "query": {
+        "pages": {
+            "1": {
+                "title": "File:Commons-logo.svg",
+                "imageinfo": [{"url": "https://upload.wikimedia.org/commons/Commons-logo.svg", "width": 1024, "height": 1024, "mime": "image/svg+xml"}],
+            },
+            "2": {
+                "title": "File:Edit-icon.png",
+                "imageinfo": [{"url": "https://upload.wikimedia.org/commons/Edit-icon.png", "width": 20, "height": 20, "mime": "image/png"}],
+            },
+            "3": {
+                "title": "File:Cathedral_exterior.jpg",
+                "imageinfo": [{"url": "https://upload.wikimedia.org/commons/Cathedral_exterior.jpg", "width": 1600, "height": 1200, "mime": "image/jpeg"}],
+            },
+            "4": {
+                "title": "File:Cathedral_interior.jpg",
+                "imageinfo": [{"url": "https://upload.wikimedia.org/commons/Cathedral_interior.jpg", "width": 800, "height": 600, "mime": "image/jpeg"}],
+            },
+            "5": {
+                "title": "File:Tiny_thumbnail.jpg",
+                "imageinfo": [{"url": "https://upload.wikimedia.org/commons/Tiny_thumbnail.jpg", "width": 100, "height": 100, "mime": "image/jpeg"}],
+            },
+            "6": {
+                "title": "File:Diagram_of_layout.svg",
+                "imageinfo": [{"url": "https://upload.wikimedia.org/commons/Diagram_of_layout.svg", "width": 2000, "height": 2000, "mime": "image/svg+xml"}],
+            },
+        }
+    }
+}
+
+ONLY_ICONS_GALLERY_RESPONSE = {
+    "query": {
+        "pages": {
+            "1": {
+                "title": "File:Commons-logo.svg",
+                "imageinfo": [{"url": "https://upload.wikimedia.org/commons/Commons-logo.svg", "width": 1024, "height": 1024, "mime": "image/svg+xml"}],
+            }
+        }
+    }
+}
+
+
+def _images_handler(lead_response: dict, gallery_response: dict):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "piprop" in request.url.params:
+            return httpx.Response(200, json=lead_response)
+        if "generator" in request.url.params:
+            return httpx.Response(200, json=gallery_response)
+        return httpx.Response(404)
+
+    return handler
+
+
+@pytest.mark.asyncio
+async def test_get_images_returns_lead_image_first():
+    async with httpx.AsyncClient() as client:
+        with respx.mock:
+            respx.get(WIKIPEDIA_API_URL).mock(
+                side_effect=_images_handler(LEAD_IMAGE_RESPONSE, GALLERY_RESPONSE)
+            )
+            images = await get_images(client, "Holy Trinity Cathedral, Addis Ababa")
+
+    assert images[0].is_lead_image is True
+    assert images[0].url == "https://upload.wikimedia.org/commons/cathedral_lead.jpg"
+
+
+@pytest.mark.asyncio
+async def test_get_images_filters_out_icons_logos_and_diagrams():
+    async with httpx.AsyncClient() as client:
+        with respx.mock:
+            respx.get(WIKIPEDIA_API_URL).mock(
+                side_effect=_images_handler(NO_LEAD_IMAGE_RESPONSE, GALLERY_RESPONSE)
+            )
+            images = await get_images(client, "Some Article")
+
+    urls = {img.url for img in images}
+    assert not any("Commons-logo" in url for url in urls)
+    assert not any("Diagram_of_layout" in url for url in urls)
+
+
+@pytest.mark.asyncio
+async def test_get_images_filters_out_too_small_images():
+    async with httpx.AsyncClient() as client:
+        with respx.mock:
+            respx.get(WIKIPEDIA_API_URL).mock(
+                side_effect=_images_handler(NO_LEAD_IMAGE_RESPONSE, GALLERY_RESPONSE)
+            )
+            images = await get_images(client, "Some Article")
+
+    assert not any("Tiny_thumbnail" in img.url for img in images)
+
+
+@pytest.mark.asyncio
+async def test_get_images_sorts_remaining_by_resolution_descending():
+    async with httpx.AsyncClient() as client:
+        with respx.mock:
+            respx.get(WIKIPEDIA_API_URL).mock(
+                side_effect=_images_handler(NO_LEAD_IMAGE_RESPONSE, GALLERY_RESPONSE)
+            )
+            images = await get_images(client, "Some Article")
+
+    assert "Cathedral_exterior" in images[0].url
+    assert "Cathedral_interior" in images[1].url
+
+
+@pytest.mark.asyncio
+async def test_get_images_respects_max_images_limit():
+    async with httpx.AsyncClient() as client:
+        with respx.mock:
+            respx.get(WIKIPEDIA_API_URL).mock(
+                side_effect=_images_handler(LEAD_IMAGE_RESPONSE, GALLERY_RESPONSE)
+            )
+            images = await get_images(client, "Holy Trinity Cathedral, Addis Ababa", max_images=2)
+
+    assert len(images) == 2
+
+
+@pytest.mark.asyncio
+async def test_get_images_returns_empty_list_when_nothing_real_exists():
+    async with httpx.AsyncClient() as client:
+        with respx.mock:
+            respx.get(WIKIPEDIA_API_URL).mock(
+                side_effect=_images_handler(NO_LEAD_IMAGE_RESPONSE, ONLY_ICONS_GALLERY_RESPONSE)
+            )
+            images = await get_images(client, "Some Article")
+
+    assert images == []
+
+
+@pytest.mark.asyncio
+async def test_get_images_handles_missing_lead_image_gracefully():
+    async with httpx.AsyncClient() as client:
+        with respx.mock:
+            respx.get(WIKIPEDIA_API_URL).mock(
+                side_effect=_images_handler(NO_LEAD_IMAGE_RESPONSE, GALLERY_RESPONSE)
+            )
+            images = await get_images(client, "Some Article")
+
+    assert not any(img.is_lead_image for img in images)
+    assert len(images) == 2

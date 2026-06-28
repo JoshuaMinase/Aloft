@@ -1,3 +1,22 @@
+"""
+Thin wrapper around three Wikipedia action-API endpoints:
+- geosearch: candidate POIs near a point (title + coordinates only)
+- get_summary: a short plain-text intro for a known article title
+- get_images: real photos for a known article title -- the editorially
+  curated lead image plus the largest/cleanest others, never AI-generated,
+  never a generic fallback
+
+Sampling multiple points along a corridor and merging geosearch results is
+poi_service.py's job, not this file's. Turning a summary into an actual
+narrated story is story_service.py's job, not this file's either -- this
+stays a thin, honest wrapper around what Wikipedia's API returns.
+
+API docs: https://www.mediawiki.org/wiki/API:Geosearch
+          https://www.mediawiki.org/wiki/API:Extracts
+          https://www.mediawiki.org/wiki/API:Pageimages
+          https://www.mediawiki.org/wiki/API:Imageinfo
+"""
+
 from __future__ import annotations
 
 import asyncio
@@ -26,6 +45,37 @@ class RawPoi(BaseModel):
     lat: float
     lng: float
     distance_m: float
+
+
+class RawImage(BaseModel):
+    """A real photo for a POI, straight from Wikimedia, unprocessed."""
+
+    url: str
+    width: int
+    height: int
+    # True for Wikipedia's own editorially-curated lead/infobox image --
+    # picked by human editors as the single best representative photo,
+    # which is a stronger "best image" signal than raw view counts even
+    # if Commons exposed those cheaply at the file level (it doesn't).
+    is_lead_image: bool
+
+
+# Below this, an image is almost certainly a thumbnail-sized icon, not a
+# real photo worth showing.
+_MIN_IMAGE_DIMENSION_PX = 400
+
+_ALLOWED_IMAGE_MIME_TYPES = {"image/jpeg", "image/png"}
+
+# Every Wikipedia article embeds standard wiki-interface images alongside
+# any real photos. Filtered by filename substring since Wikipedia doesn't
+# tag them as "interface chrome" in any structured way the API exposes.
+_EXCLUDED_FILENAME_SUBSTRINGS = (
+    "commons-logo", "wiktionary", "wikidata-logo", "wikinews", "wikiquote",
+    "edit-icon", "icon_", "_icon", "question_book", "ambox", "padlock",
+    "disambig", "wiki_letter", "p_vip", "merge-arrow", "octagon-",
+    "red_pencil", "loudspeaker", "speakerlink", "crystal_clear",
+    "symbol_", "text_document", "folder_", "ablogo", "ok-icon",
+)
 
 
 class WikipediaClientError(Exception):
@@ -67,6 +117,110 @@ async def get_summary(client: httpx.AsyncClient, title: str) -> str:
     }
     response = await _request_with_retries(client, params, log_context=f"get_summary for '{title}'")
     return _parse_summary_response(response, title)
+
+
+async def get_images(
+    client: httpx.AsyncClient, title: str, max_images: int = 4
+) -> list[RawImage]:
+    """Fetch real photos for a Wikipedia article -- never AI-generated,
+    never a generic fallback. Empty list means no real image exists, not an error.
+
+    Combines two signals (Commons doesn't expose per-file view counts cheaply):
+    1. pageimages -- Wikipedia's editorially-curated lead image, returned first.
+    2. Largest other real photos embedded in the article, after filtering
+       wiki-interface icons/logos/diagrams and sub-400px images, ranked by
+       resolution descending.
+
+    Raises:
+        WikipediaClientError: if a request fails outright.
+    """
+    lead_image = await _get_lead_image(client, title)
+    gallery_images = await _get_gallery_images(client, title)
+
+    results: list[RawImage] = []
+    seen_urls: set[str] = set()
+
+    if lead_image is not None:
+        results.append(lead_image)
+        seen_urls.add(lead_image.url)
+
+    gallery_images.sort(key=lambda img: img.width * img.height, reverse=True)
+    for image in gallery_images:
+        if len(results) >= max_images:
+            break
+        if image.url in seen_urls:
+            continue
+        results.append(image)
+        seen_urls.add(image.url)
+
+    return results
+
+
+async def _get_lead_image(client: httpx.AsyncClient, title: str) -> RawImage | None:
+    params = {
+        "action": "query",
+        "prop": "pageimages",
+        "piprop": "original",
+        "titles": title,
+        "format": "json",
+    }
+    response = await _request_with_retries(
+        client, params, log_context=f"get_lead_image for '{title}'"
+    )
+    pages = response.json().get("query", {}).get("pages", {})
+    if not pages:
+        return None
+    page = next(iter(pages.values()))
+    original = page.get("original")
+    if original is None:
+        return None
+    return RawImage(
+        url=original["source"], width=original["width"], height=original["height"],
+        is_lead_image=True,
+    )
+
+
+async def _get_gallery_images(client: httpx.AsyncClient, title: str) -> list[RawImage]:
+    params = {
+        "action": "query",
+        "generator": "images",
+        "titles": title,
+        "prop": "imageinfo",
+        "iiprop": "url|size|mime",
+        "gimlimit": 50,
+        "format": "json",
+    }
+    response = await _request_with_retries(
+        client, params, log_context=f"get_gallery_images for '{title}'"
+    )
+    pages = response.json().get("query", {}).get("pages", {})
+
+    images: list[RawImage] = []
+    for page in pages.values():
+        imageinfo = (page.get("imageinfo") or [{}])[0]
+        if not imageinfo or not _is_real_photo(imageinfo):
+            continue
+        images.append(
+            RawImage(
+                url=imageinfo["url"], width=imageinfo["width"], height=imageinfo["height"],
+                is_lead_image=False,
+            )
+        )
+    return images
+
+
+def _is_real_photo(imageinfo: dict) -> bool:
+    """Filters out wiki-interface chrome, diagrams, and anything too small."""
+    mime = imageinfo.get("mime", "")
+    width = imageinfo.get("width", 0)
+    height = imageinfo.get("height", 0)
+    url = imageinfo.get("url", "").lower()
+
+    if mime not in _ALLOWED_IMAGE_MIME_TYPES:
+        return False
+    if width < _MIN_IMAGE_DIMENSION_PX or height < _MIN_IMAGE_DIMENSION_PX:
+        return False
+    return not any(pattern in url for pattern in _EXCLUDED_FILENAME_SUBSTRINGS)
 
 
 async def _request_with_retries(

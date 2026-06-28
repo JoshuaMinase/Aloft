@@ -9,7 +9,7 @@ from fastapi import FastAPI
 
 from app.core.config import get_settings
 from app.core.db import close_mongo_connection, connect_to_mongo
-from app.routers import audio, flights, pois, stories
+from app.routers import audio, flights, images, pois, stories
 
 logging.basicConfig(
     level=getattr(logging, get_settings().log_level.upper(), logging.INFO),
@@ -34,6 +34,7 @@ app.include_router(pois.router)
 app.include_router(stories.router)
 app.include_router(audio.router)
 app.include_router(flights.router)
+app.include_router(images.router)
 
 
 @app.get("/health")

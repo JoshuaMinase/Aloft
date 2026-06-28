@@ -3,7 +3,7 @@ from mongomock_motor import AsyncMongoMockClient
 
 from app.clients.wikipedia import RawPoi
 from app.core.db import ensure_indexes
-from app.services.poi_repository import get_poi, save_pois
+from app.services.poi_repository import get_poi, save_poi_images, save_pois
 
 CATHEDRAL = RawPoi(title="Cathedral", page_id=1001, lat=9.0177, lng=38.7669, distance_m=450.2)
 MUSEUM = RawPoi(title="Museum", page_id=1002, lat=9.0339, lng=38.7611, distance_m=1820.7)
@@ -87,3 +87,23 @@ async def test_get_poi_returns_the_saved_poi(db):
     assert poi.name == "Cathedral"
     assert poi.source_id == "wikipedia:1001"
     assert poi.location == {"type": "Point", "coordinates": [38.7669, 9.0177]}
+
+
+@pytest.mark.asyncio
+async def test_save_poi_images_updates_image_refs(db):
+    await save_pois(db, [CATHEDRAL])
+
+    await save_poi_images(db, "wikipedia:1001", ["https://example.com/photo1.jpg"])
+
+    poi = await get_poi(db, "wikipedia:1001")
+    assert poi.image_refs == ["https://example.com/photo1.jpg"]
+
+
+@pytest.mark.asyncio
+async def test_save_poi_images_accepts_empty_list_as_honest_result(db):
+    await save_pois(db, [CATHEDRAL])
+
+    await save_poi_images(db, "wikipedia:1001", [])
+
+    poi = await get_poi(db, "wikipedia:1001")
+    assert poi.image_refs == []

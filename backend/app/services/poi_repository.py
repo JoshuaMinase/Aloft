@@ -27,3 +27,14 @@ async def get_poi(db: AsyncIOMotorDatabase, source_id: str) -> Poi | None:
         return None
     doc.pop("_id", None)
     return Poi(**doc)
+
+
+
+async def save_poi_images(db: AsyncIOMotorDatabase, source_id: str, image_urls: list[str]) -> None:
+    """Update a POI's image_refs after fetching real photos for it.
+
+    image_urls may be an empty list -- that's the honest "no real images
+    exist" outcome, not an error, and gets stored as such rather than left
+    unset and ambiguous with "never checked."
+    """
+    await db.pois.update_one({"source_id": source_id}, {"$set": {"image_refs": image_urls}})
