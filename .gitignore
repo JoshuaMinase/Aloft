@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+
+# Env files
+backend/.env
+backend/.env.example
+
+# Audio storage
+backend/audio_storage/
+
+# pytest / ruff caches
+.pytest_cache/
+.ruff_cache/
