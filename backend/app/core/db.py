@@ -40,3 +40,4 @@ async def ensure_indexes(db: AsyncIOMotorDatabase) -> None:
     await db.pois.create_index("source_id", unique=True, sparse=True)
     await db.stories.create_index([("poi_source_id", 1), ("language", 1)], unique=True)
     await db.airports.create_index("iata_code", unique=True)
+    await db.route_bundles.create_index("route_key", unique=True)

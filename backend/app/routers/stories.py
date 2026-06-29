@@ -27,6 +27,7 @@ class StoryResponse(BaseModel):
 async def create_story(
     source_id: str = Path(..., max_length=200),
     language: str = "en",
+    force: bool = False,
     client: httpx.AsyncClient = Depends(get_http_client),
     db: AsyncIOMotorDatabase = Depends(get_database),
 ) -> StoryResponse:
@@ -43,13 +44,14 @@ async def create_story(
             detail=f"No POI found for source_id '{source_id}'. Discover it first via POST /routes/pois.",
         )
 
-    cached = await get_story(db, source_id, language)
-    if cached is not None:
-        return StoryResponse(
-            poi_source_id=cached.poi_source_id,
-            language=cached.language,
-            text_content=cached.text_content,
-        )
+    if not force:
+        cached = await get_story(db, source_id, language)
+        if cached is not None:
+            return StoryResponse(
+                poi_source_id=cached.poi_source_id,
+                language=cached.language,
+                text_content=cached.text_content,
+            )
 
     try:
         story = await generate_story(client, source_id, poi.name, language=language)

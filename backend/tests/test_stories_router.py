@@ -164,3 +164,23 @@ def test_create_story_400_for_unsupported_language(test_client):
 
     assert response.status_code == 400
     assert "Unsupported language" in response.json()["detail"]
+
+
+
+@pytest.mark.asyncio
+async def test_create_story_force_regenerates_even_when_cached(test_client, mongomock_db):
+    await save_pois(mongomock_db, [CATHEDRAL_RAW])
+
+    with respx.mock:
+        respx.get(WIKIPEDIA_API_URL).mock(return_value=httpx.Response(200, json=CATHEDRAL_SUMMARY))
+        respx.post(GROQ_API_URL).mock(return_value=httpx.Response(200, json=GENERATED_TEXT))
+        test_client.post("/pois/wikipedia:1001/story")
+
+    new_text = {"choices": [{"message": {"content": "A freshly regenerated story."}}]}
+    with respx.mock:
+        respx.get(WIKIPEDIA_API_URL).mock(return_value=httpx.Response(200, json=CATHEDRAL_SUMMARY))
+        groq_route = respx.post(GROQ_API_URL).mock(return_value=httpx.Response(200, json=new_text))
+        response = test_client.post("/pois/wikipedia:1001/story?force=true")
+
+    assert groq_route.call_count == 1
+    assert response.json()["text_content"] == "A freshly regenerated story."

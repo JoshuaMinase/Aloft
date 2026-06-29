@@ -10,12 +10,14 @@ from app.core.dependencies import get_database, get_http_client
 from app.services.flight_resolution import resolve_flight_route
 from app.services.poi_repository import save_pois
 from app.services.poi_service import find_pois_along_corridor
+from app.services.route_bundle_repository import save_route_bundle
 
 router = APIRouter(prefix="/flights", tags=["flights"])
 
 
 class DiscoverPoisByFlightResponse(BaseModel):
     flight_iata: str
+    route_key: str
     departure: tuple[float, float]
     arrival: tuple[float, float]
     pois_found: int
@@ -42,9 +44,12 @@ async def discover_pois_for_flight(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     inserted = await save_pois(db, pois)
+    poi_source_ids = [f"wikipedia:{poi.page_id}" for poi in pois]
+    bundle = await save_route_bundle(db, departure, arrival, poi_source_ids)
 
     return DiscoverPoisByFlightResponse(
         flight_iata=flight_iata,
+        route_key=bundle.route_key,
         departure=departure,
         arrival=arrival,
         pois_found=len(pois),

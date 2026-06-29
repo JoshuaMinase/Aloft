@@ -114,3 +114,19 @@ def test_discover_pois_rejects_malformed_request_body(test_client):
     response = test_client.post("/routes/pois", json={"departure": ADD})  # missing arrival
 
     assert response.status_code == 422  # FastAPI's own validation, not ours
+
+
+
+def test_discover_pois_returns_a_usable_route_key(test_client):
+    with respx.mock:
+        respx.get(WIKIPEDIA_API_URL).mock(
+            return_value=httpx.Response(200, json=FIXED_RESPONSE)
+        )
+        response = test_client.post(
+            "/routes/pois", json={"departure": ADD, "arrival": DXB, "width_km": 20}
+        )
+
+    from app.services.route_bundle_repository import make_route_key
+
+    expected_key = make_route_key((ADD["lat"], ADD["lng"]), (DXB["lat"], DXB["lng"]))
+    assert response.json()["route_key"] == expected_key
