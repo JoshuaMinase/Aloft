@@ -130,15 +130,19 @@ async def test_synthesize_speech_does_not_retry_invalid_argument(http_client):
 
 @pytest.mark.asyncio
 async def test_synthesize_speech_raises_when_api_key_not_set(monkeypatch):
-    """When ELEVENLABS_API_KEY is absent entirely (not just empty), the
-    client raises immediately with a clear message before making any request.
+    """When ELEVENLABS_API_KEY is absent, the client raises immediately
+    with a clear message before making any request.
     """
-    # Override the fixture's fake key -- unset it entirely
-    monkeypatch.delenv("ELEVENLABS_API_KEY", raising=False)
-    get_settings.cache_clear()
+    from app.core.config import Settings
 
-    try:
-        with pytest.raises(TtsClientError, match="ELEVENLABS_API_KEY"):
-            await synthesize_speech("Some text", voice_id=_VOICE_ID)
-    finally:
-        get_settings.cache_clear()
+    # Patch get_settings to return a settings object with no API key,
+    # bypassing .env file loading entirely -- delenv alone isn't enough
+    # because pydantic-settings also reads the .env file on disk.
+    fake_settings = Settings.model_construct(
+        elevenlabs_api_key=None,
+        elevenlabs_voice_id="21m00Tcm4TlvDq8ikWAM",
+    )
+    monkeypatch.setattr("app.clients.tts.get_settings", lambda: fake_settings)
+
+    with pytest.raises(TtsClientError, match="ELEVENLABS_API_KEY"):
+        await synthesize_speech("Some text", voice_id=_VOICE_ID)
