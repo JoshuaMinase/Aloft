@@ -1,5 +1,14 @@
+"""
+End-to-end tests for the sessions router.
+Sessions now live in Redis -- fakeredis provides the in-process fake.
+MongoDB (mongomock) is still needed for route bundles, POIs, and stories.
+"""
+
+from __future__ import annotations
+
 from collections.abc import Iterator
 
+import fakeredis.aioredis as fakeredis
 import httpx
 import pytest
 from fastapi.testclient import TestClient
@@ -7,7 +16,7 @@ from mongomock_motor import AsyncMongoMockClient
 
 from app.clients.wikipedia import RawPoi
 from app.core.db import ensure_indexes
-from app.core.dependencies import get_database, get_http_client
+from app.core.dependencies import get_database, get_http_client, get_redis
 from app.main import app
 from app.models.story import Story
 from app.services.poi_repository import save_pois
@@ -17,7 +26,6 @@ from app.services.story_repository import save_story
 ADD = (8.9806, 38.7992)
 DXB = (25.2532, 55.3657)
 
-# POI placed at (9.0, 38.0) -- tests send position pings to the same coords
 NEARBY_POI = RawPoi(title="Cathedral", page_id=1001, lat=9.0, lng=38.0, distance_m=100)
 
 
@@ -30,9 +38,17 @@ async def db():
 
 
 @pytest.fixture
-def test_client(db) -> Iterator[TestClient]:
+async def redis():
+    server = fakeredis.FakeRedis()
+    yield server
+    await server.aclose()
+
+
+@pytest.fixture
+def test_client(db, redis) -> Iterator[TestClient]:
     app.dependency_overrides[get_database] = lambda: db
     app.dependency_overrides[get_http_client] = lambda: httpx.AsyncClient()
+    app.dependency_overrides[get_redis] = lambda: redis
     yield TestClient(app)
     app.dependency_overrides.clear()
 
@@ -95,7 +111,6 @@ async def test_position_update_not_triggered_when_nothing_nearby(test_client, db
     bundle = await save_route_bundle(db, ADD, DXB, ["wikipedia:1001"])
     session_id = test_client.post("/sessions", json={"route_key": bundle.route_key}).json()["session_id"]
 
-    # Far from the only POI on this route
     response = test_client.post(
         f"/sessions/{session_id}/position", json={"lat": 0.0, "lng": 0.0}
     )
@@ -123,17 +138,13 @@ async def test_same_poi_does_not_retrigger_on_second_nearby_ping(test_client, db
     second = test_client.post(f"/sessions/{session_id}/position", json={"lat": 9.0, "lng": 38.0})
 
     assert first.json()["triggered"] is True
-    assert second.json()["triggered"] is False  # already narrated this session
+    assert second.json()["triggered"] is False
 
 
 @pytest.mark.asyncio
 async def test_triggered_poi_with_no_story_still_marks_narrated(test_client, db):
-    """A POI with no story yet is still marked narrated so it's never
-    silently re-offered forever. text_content comes back null instead.
-    """
     await save_pois(db, [NEARBY_POI])
     bundle = await save_route_bundle(db, ADD, DXB, ["wikipedia:1001"])
-    # Deliberately no save_story() call
     session_id = test_client.post("/sessions", json={"route_key": bundle.route_key}).json()["session_id"]
 
     first = test_client.post(f"/sessions/{session_id}/position", json={"lat": 9.0, "lng": 38.0})
@@ -141,4 +152,4 @@ async def test_triggered_poi_with_no_story_still_marks_narrated(test_client, db)
 
     assert first.json()["triggered"] is True
     assert first.json()["narration"]["text_content"] is None
-    assert second.json()["triggered"] is False  # not re-offered despite missing content
+    assert second.json()["triggered"] is False

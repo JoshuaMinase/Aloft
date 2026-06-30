@@ -9,6 +9,7 @@ from fastapi import FastAPI
 
 from app.core.config import get_settings
 from app.core.db import close_mongo_connection, connect_to_mongo
+from app.core.redis import close_redis_connection, connect_to_redis
 from app.routers import audio, content, download, flights, images, pois, sessions, stories
 
 logging.basicConfig(
@@ -21,10 +22,12 @@ logger = logging.getLogger("aloft.main")
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await connect_to_mongo()
+    await connect_to_redis()
     app.state.http_client = httpx.AsyncClient()
     logger.info("Aloft backend started")
     yield
     await app.state.http_client.aclose()
+    await close_redis_connection()
     await close_mongo_connection()
     logger.info("Aloft backend shut down")
 

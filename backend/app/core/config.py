@@ -12,6 +12,10 @@ class Settings(BaseSettings):
     app_contact_email: str = "you@example.com"
     mongodb_uri: str = "mongodb://localhost:27017"
     mongodb_db_name: str = "aloft"
+    redis_url: str = "redis://localhost:6379"
+    # How long a flight session lives in Redis before auto-expiring.
+    # 12 hours covers any realistic flight duration with margin.
+    session_ttl_seconds: int = 43200
     corridor_width_km: float = 100.0
     groq_api_key: SecretStr | None = None
     groq_model: str = "llama3-70b-8192"
