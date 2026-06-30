@@ -65,6 +65,17 @@ def point_in_corridor(polygon: Polygon, lat: float, lng: float) -> bool:
     return polygon.contains(Point(lng, lat))
 
 
+def distance_km(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
+    """Real geodesic distance between two points, in kilometers.
+
+    Shared here because it's the same WGS84 ellipsoid math _is_same_point
+    already uses internally -- one correct implementation, not a second
+    one that might quietly drift from it.
+    """
+    _, _, distance_m = _GEOD.inv(lng1, lat1, lng2, lat2)
+    return distance_m / 1000
+
+
 def _is_same_point(lat1: float, lng1: float, lat2: float, lng2: float) -> bool:
     _, _, distance_m = _GEOD.inv(lng1, lat1, lng2, lat2)
     return distance_m < 1.0

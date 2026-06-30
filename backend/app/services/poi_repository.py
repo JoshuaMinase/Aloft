@@ -38,3 +38,13 @@ async def save_poi_images(db: AsyncIOMotorDatabase, source_id: str, image_urls: 
     unset and ambiguous with "never checked."
     """
     await db.pois.update_one({"source_id": source_id}, {"$set": {"image_refs": image_urls}})
+
+
+async def get_pois_by_source_ids(db: AsyncIOMotorDatabase, source_ids: list[str]) -> list[Poi]:
+    """Fetch many POIs in one query -- $in avoids N round trips for N source_ids."""
+    cursor = db.pois.find({"source_id": {"$in": source_ids}})
+    pois = []
+    async for doc in cursor:
+        doc.pop("_id", None)
+        pois.append(Poi(**doc))
+    return pois

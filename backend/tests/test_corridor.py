@@ -6,6 +6,7 @@ from app.services.corridor import (
     DegenerateRouteError,
     build_corridor,
     corridor_to_geojson,
+    distance_km,
     point_in_corridor,
     sample_points_by_spacing,
 )
@@ -107,3 +108,20 @@ def test_sample_points_by_spacing_keeps_consistent_gaps():
 def test_sample_points_by_spacing_rejects_non_positive_spacing():
     with pytest.raises(ValueError):
         sample_points_by_spacing(ADD, DXB, spacing_km=0)
+
+
+def test_distance_km_matches_known_real_world_distance():
+    # Verified against independent airport-distance calculators: ADD-DXB
+    # is ~2514.6km (confirmed against multiple sources, not assumed).
+    d = distance_km(ADD[0], ADD[1], DXB[0], DXB[1])
+    assert abs(d - 2514.6) < 5
+
+
+def test_distance_km_is_zero_for_the_same_point():
+    assert distance_km(9.0, 38.0, 9.0, 38.0) < 0.001
+
+
+def test_distance_km_is_symmetric():
+    d_fwd = distance_km(ADD[0], ADD[1], DXB[0], DXB[1])
+    d_bwd = distance_km(DXB[0], DXB[1], ADD[0], ADD[1])
+    assert abs(d_fwd - d_bwd) < 0.001
