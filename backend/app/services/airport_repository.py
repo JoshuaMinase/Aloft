@@ -55,7 +55,6 @@ _STATIC_AIRPORTS: dict[str, tuple[float, float]] = {
     "ATH": (37.9364, 23.9445),  # Athens
     "LIS": (38.7813, -9.1359),  # Lisbon
     # Asia
-    "DXB": (25.2532, 55.3657),  # Dubai (already above)
     "SIN": (1.3644, 103.9915),  # Singapore Changi
     "BKK": (13.6811, 100.7475), # Bangkok Suvarnabhumi
     "KUL": (2.7456, 101.7099),  # Kuala Lumpur

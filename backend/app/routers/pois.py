@@ -53,7 +53,7 @@ class DiscoverPoisRequest(BaseModel):
     width_km: float = 20.0
 
     @model_validator(mode="after")
-    def check_inputs(self) -> "DiscoverPoisRequest":
+    def check_inputs(self) -> DiscoverPoisRequest:
         has_coords = self.departure is not None and self.arrival is not None
         has_iata = self.departure_iata is not None and self.arrival_iata is not None
         if not has_coords and not has_iata:
