@@ -5,8 +5,8 @@ Uses fakeredis-py -- an in-process Redis emulator, no real server needed.
 
 from __future__ import annotations
 
-import pytest
 import fakeredis.aioredis as fakeredis
+import pytest
 
 from app.services.flight_session_repository import (
     create_session,
