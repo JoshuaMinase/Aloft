@@ -7,7 +7,6 @@ httpx==0.28.1
 shapely==2.0.6
 geopy==2.4.1
 pyproj==3.7.2
-google-cloud-texttospeech==2.37.0
 pydub==0.25.1
 
 # dev / test

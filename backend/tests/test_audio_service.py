@@ -6,40 +6,36 @@ from app.services.audio_service import synthesize_story_audio
 
 
 @pytest.mark.asyncio
-async def test_maps_internal_language_to_bcp47(monkeypatch):
-    mock_synth = AsyncMock(return_value=b"audio bytes")
-    monkeypatch.setattr("app.services.audio_service.synthesize_speech", mock_synth)
-
-    await synthesize_story_audio("Some text", "am")
-
-    mock_synth.assert_awaited_once_with("Some text", language_code="am-ET", voice_name=None)
-
-
-@pytest.mark.asyncio
-async def test_defaults_to_english(monkeypatch):
+async def test_forwards_text_to_synthesize_speech(monkeypatch):
     mock_synth = AsyncMock(return_value=b"audio bytes")
     monkeypatch.setattr("app.services.audio_service.synthesize_speech", mock_synth)
 
     await synthesize_story_audio("Some text")
 
-    mock_synth.assert_awaited_once_with("Some text", language_code="en-US", voice_name=None)
+    mock_synth.assert_awaited_once_with("Some text", voice_id=None, http_client=None)
 
 
 @pytest.mark.asyncio
-async def test_falls_back_to_raw_code_for_unmapped_language(monkeypatch):
+async def test_passes_through_explicit_voice_id(monkeypatch):
     mock_synth = AsyncMock(return_value=b"audio bytes")
     monkeypatch.setattr("app.services.audio_service.synthesize_speech", mock_synth)
 
-    await synthesize_story_audio("Text", "xx")
+    await synthesize_story_audio("Text", voice_id="AZnzlk1XvdvUeBnXmlld")
 
-    mock_synth.assert_awaited_once_with("Text", language_code="xx", voice_name=None)
+    mock_synth.assert_awaited_once_with(
+        "Text", voice_id="AZnzlk1XvdvUeBnXmlld", http_client=None
+    )
 
 
 @pytest.mark.asyncio
-async def test_passes_through_explicit_voice_name(monkeypatch):
+async def test_language_param_accepted_but_does_not_change_call(monkeypatch):
+    """ElevenLabs is multilingual -- language doesn't affect the API call,
+    but the parameter is kept for API compatibility with the router layer.
+    """
     mock_synth = AsyncMock(return_value=b"audio bytes")
     monkeypatch.setattr("app.services.audio_service.synthesize_speech", mock_synth)
 
-    await synthesize_story_audio("Text", "en", voice_name="custom-voice")
+    await synthesize_story_audio("Some text", language="am")
 
-    mock_synth.assert_awaited_once_with("Text", language_code="en-US", voice_name="custom-voice")
+    # Language is NOT forwarded -- ElevenLabs detects it from the text
+    mock_synth.assert_awaited_once_with("Some text", voice_id=None, http_client=None)

@@ -88,10 +88,10 @@ async def _ensure_story_and_audio(
 
     settings = get_settings()
     try:
-        existing_audio = await get_audio(db, source_id, language, settings.tts_voice_name)
+        existing_audio = await get_audio(db, source_id, language, settings.elevenlabs_voice_id)
         if existing_audio is None:
             audio_bytes = await synthesize_story_audio(story.text_content, language=language)
-            await save_audio(db, source_id, language, settings.tts_voice_name, audio_bytes)
+            await save_audio(db, source_id, language, settings.elevenlabs_voice_id, audio_bytes)
     except TtsClientError as exc:
         logger.warning("Audio synthesis failed for %s: %s", source_id, exc)
         return True, False, f"Audio synthesis failed: {exc}"

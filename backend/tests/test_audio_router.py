@@ -12,10 +12,17 @@ from app.main import app
 from app.models.story import Story
 from app.services.story_repository import save_story
 
+_DEFAULT_VOICE_ID = "21m00Tcm4TlvDq8ikWAM"
+
 
 @pytest.fixture(autouse=True)
 def fake_storage_dir(tmp_path, monkeypatch):
-    fake_settings = type("S", (), {"audio_storage_dir": str(tmp_path), "tts_voice_name": "en-US-Wavenet-D"})()
+    fake_settings = type(
+        "S", (), {
+            "audio_storage_dir": str(tmp_path),
+            "elevenlabs_voice_id": _DEFAULT_VOICE_ID,
+        }
+    )()
     monkeypatch.setattr("app.services.audio_repository.get_settings", lambda: fake_settings)
     monkeypatch.setattr("app.routers.audio.get_settings", lambda: fake_settings)
     return tmp_path

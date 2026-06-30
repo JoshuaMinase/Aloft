@@ -1,21 +1,24 @@
 """
-Tests for the TTS client. Mocks at the _get_client() level since this
-isn't an httpx-based client -- respx only intercepts httpx traffic,
-not Google's gRPC-based client library.
+Tests for the ElevenLabs TTS client.
+
+Uses respx to intercept httpx calls -- the same pattern as the Wikipedia
+and AviationStack client tests. No Google imports, no gRPC mocking.
 """
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from __future__ import annotations
 
+from unittest.mock import AsyncMock, patch
+
+import httpx
 import pytest
-from google.api_core import exceptions as google_exceptions
+import respx
 
 from app.clients.tts import TtsClientError, synthesize_speech
+from app.core.config import get_settings
 
-
-def _fake_response(audio_content: bytes = b"fake-mp3-bytes") -> MagicMock:
-    response = MagicMock()
-    response.audio_content = audio_content
-    return response
+_VOICE_ID = "21m00Tcm4TlvDq8ikWAM"
+_FAKE_API_KEY = "sk_test_fake_key_for_tests"
+_TTS_URL = f"https://api.elevenlabs.io/v1/text-to-speech/{_VOICE_ID}"
 
 
 @pytest.fixture(autouse=True)
@@ -25,90 +28,117 @@ def no_real_sleep():
 
 
 @pytest.fixture(autouse=True)
-def reset_client_singleton():
-    """_get_client() caches a module-level client -- reset it between
-    tests so one test's mock doesn't leak into the next.
+def fake_api_key(monkeypatch):
+    """Inject a fake API key so tests never fail on missing key.
+    Clears the lru_cache before and after so the patched value is picked up.
     """
-    import app.clients.tts as tts_module
-
-    tts_module._client = None
+    get_settings.cache_clear()
+    monkeypatch.setenv("ELEVENLABS_API_KEY", _FAKE_API_KEY)
+    get_settings.cache_clear()
     yield
-    tts_module._client = None
+    get_settings.cache_clear()
 
 
-def _mock_client(monkeypatch, synthesize_speech_mock: AsyncMock) -> None:
-    fake_client = MagicMock()
-    fake_client.synthesize_speech = synthesize_speech_mock
-    monkeypatch.setattr("app.clients.tts._get_client", lambda: fake_client)
-
-
-@pytest.mark.asyncio
-async def test_synthesize_speech_returns_audio_bytes(monkeypatch):
-    _mock_client(monkeypatch, AsyncMock(return_value=_fake_response(b"real-sounding-audio")))
-
-    audio = await synthesize_speech("A cathedral rises above the hills.")
-
-    assert audio == b"real-sounding-audio"
+@pytest.fixture
+def http_client():
+    """A real httpx.AsyncClient whose traffic respx will intercept."""
+    return httpx.AsyncClient()
 
 
 @pytest.mark.asyncio
-async def test_synthesize_speech_uses_default_voice_and_language(monkeypatch):
-    mock_call = AsyncMock(return_value=_fake_response())
-    _mock_client(monkeypatch, mock_call)
+@respx.mock
+async def test_synthesize_speech_returns_audio_bytes(http_client):
+    respx.post(_TTS_URL).mock(
+        return_value=httpx.Response(200, content=b"fake-mp3-bytes")
+    )
 
-    await synthesize_speech("Some text")
+    audio = await synthesize_speech(
+        "A cathedral rises above the hills.",
+        voice_id=_VOICE_ID,
+        http_client=http_client,
+    )
 
-    sent_request = mock_call.call_args.kwargs["request"]
-    assert sent_request.voice.language_code == "en-US"
-    assert sent_request.voice.name == "en-US-Wavenet-D"
-    assert sent_request.input.text == "Some text"
-
-
-@pytest.mark.asyncio
-async def test_synthesize_speech_allows_overriding_voice_and_language(monkeypatch):
-    mock_call = AsyncMock(return_value=_fake_response())
-    _mock_client(monkeypatch, mock_call)
-
-    await synthesize_speech("Some text", language_code="am-ET", voice_name="am-ET-Custom")
-
-    sent_request = mock_call.call_args.kwargs["request"]
-    assert sent_request.voice.language_code == "am-ET"
-    assert sent_request.voice.name == "am-ET-Custom"
+    assert audio == b"fake-mp3-bytes"
 
 
 @pytest.mark.asyncio
-async def test_synthesize_speech_retries_on_service_unavailable_then_succeeds(monkeypatch):
-    mock_call = AsyncMock(
+@respx.mock
+async def test_synthesize_speech_sends_correct_headers(http_client):
+    route = respx.post(_TTS_URL).mock(
+        return_value=httpx.Response(200, content=b"audio")
+    )
+
+    await synthesize_speech("Some text", voice_id=_VOICE_ID, http_client=http_client)
+
+    assert route.called
+    sent = route.calls[0].request
+    assert sent.headers["xi-api-key"] == _FAKE_API_KEY
+    assert sent.headers["Accept"] == "audio/mpeg"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_synthesize_speech_allows_overriding_voice_id(http_client):
+    custom_voice = "AZnzlk1XvdvUeBnXmlld"
+    custom_url = f"https://api.elevenlabs.io/v1/text-to-speech/{custom_voice}"
+    respx.post(custom_url).mock(return_value=httpx.Response(200, content=b"custom-audio"))
+
+    audio = await synthesize_speech("Some text", voice_id=custom_voice, http_client=http_client)
+
+    assert audio == b"custom-audio"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_synthesize_speech_retries_on_503_then_succeeds(http_client):
+    respx.post(_TTS_URL).mock(
         side_effect=[
-            google_exceptions.ServiceUnavailable("temporarily down"),
-            _fake_response(b"recovered audio"),
+            httpx.Response(503, text="temporarily unavailable"),
+            httpx.Response(200, content=b"recovered audio"),
         ]
     )
-    _mock_client(monkeypatch, mock_call)
 
-    audio = await synthesize_speech("Some text")
+    audio = await synthesize_speech("Some text", voice_id=_VOICE_ID, http_client=http_client)
 
     assert audio == b"recovered audio"
-    assert mock_call.call_count == 2
 
 
 @pytest.mark.asyncio
-async def test_synthesize_speech_raises_after_exhausting_retries(monkeypatch):
-    mock_call = AsyncMock(side_effect=google_exceptions.ServiceUnavailable("still down"))
-    _mock_client(monkeypatch, mock_call)
+@respx.mock
+async def test_synthesize_speech_raises_after_exhausting_retries(http_client):
+    respx.post(_TTS_URL).mock(
+        return_value=httpx.Response(503, text="still down")
+    )
 
-    with pytest.raises(TtsClientError):
-        await synthesize_speech("Some text")
-
-    assert mock_call.call_count == 3
+    with pytest.raises(TtsClientError, match="3 attempts"):
+        await synthesize_speech("Some text", voice_id=_VOICE_ID, http_client=http_client)
 
 
 @pytest.mark.asyncio
-async def test_synthesize_speech_does_not_retry_invalid_argument(monkeypatch):
-    mock_call = AsyncMock(side_effect=google_exceptions.InvalidArgument("bad voice name"))
-    _mock_client(monkeypatch, mock_call)
+@respx.mock
+async def test_synthesize_speech_does_not_retry_invalid_argument(http_client):
+    route = respx.post(_TTS_URL).mock(
+        return_value=httpx.Response(422, json={"detail": "invalid voice_id"})
+    )
 
     with pytest.raises(TtsClientError, match="non-retryable"):
-        await synthesize_speech("Some text")
+        await synthesize_speech("Some text", voice_id=_VOICE_ID, http_client=http_client)
 
-    assert mock_call.call_count == 1
+    # 422 is non-retryable -- called exactly once
+    assert route.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_synthesize_speech_raises_when_api_key_not_set(monkeypatch):
+    """When ELEVENLABS_API_KEY is absent entirely (not just empty), the
+    client raises immediately with a clear message before making any request.
+    """
+    # Override the fixture's fake key -- unset it entirely
+    monkeypatch.delenv("ELEVENLABS_API_KEY", raising=False)
+    get_settings.cache_clear()
+
+    try:
+        with pytest.raises(TtsClientError, match="ELEVENLABS_API_KEY"):
+            await synthesize_speech("Some text", voice_id=_VOICE_ID)
+    finally:
+        get_settings.cache_clear()

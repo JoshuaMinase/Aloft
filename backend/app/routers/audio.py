@@ -19,10 +19,10 @@ router = APIRouter(prefix="/pois", tags=["audio"])
 async def create_audio(
     source_id: str,
     language: str = "en",
-    voice_name: str | None = None,
+    voice_id: str | None = None,
     db: AsyncIOMotorDatabase = Depends(get_database),
 ) -> Response:
-    resolved_voice = voice_name or get_settings().tts_voice_name
+    resolved_voice = voice_id or get_settings().elevenlabs_voice_id
 
     existing = await get_audio(db, source_id, language, resolved_voice)
     if existing is not None and Path(existing.file_path).exists():
@@ -35,7 +35,9 @@ async def create_audio(
             detail=f"No story found for source_id '{source_id}' in language '{language}'. Generate it first via POST /pois/{source_id}/story.",
         )
 
-    audio_bytes = await synthesize_story_audio(story.text_content, language=language, voice_name=resolved_voice)
+    audio_bytes = await synthesize_story_audio(
+        story.text_content, language=language, voice_id=resolved_voice
+    )
     asset = await save_audio(db, source_id, language, resolved_voice, audio_bytes)
 
     return Response(content=Path(asset.file_path).read_bytes(), media_type="audio/mpeg")

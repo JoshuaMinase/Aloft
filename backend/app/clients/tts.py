@@ -1,19 +1,13 @@
 """
-Wraps Google Cloud Text-to-Speech's official async client.
+ElevenLabs text-to-speech client.
 
-Unlike every other client in this app, this is NOT a thin httpx wrapper.
-Cloud TTS doesn't support simple API-key auth -- confirmed against
-Google's own docs, which only describe OAuth2/Application Default
-Credentials for this API (unlike its sibling Speech-to-Text API, which
-does support a plain ?key= API key). Hand-rolling JWT signing and token
-refresh ourselves would be real, unnecessary risk for something Google's
-own google-auth library already does correctly -- so this uses their
-official async client, the one deliberate exception to this project's
-"thin httpx wrapper" pattern.
+Uses ElevenLabs' /v1/text-to-speech/{voice_id} endpoint directly via
+httpx -- the same thin-wrapper pattern as every other client in this app.
+No credit card required on the free tier (10,000 chars/month).
 
-Credentials are picked up automatically from GOOGLE_APPLICATION_CREDENTIALS
-via Application Default Credentials -- no code here reads that env var
-directly, Google's library does it internally.
+Auth: a plain API key in the xi-api-key header. No OAuth, no service
+account JSON, no Application Default Credentials -- just set
+ELEVENLABS_API_KEY in your .env file.
 """
 
 from __future__ import annotations
@@ -21,98 +15,109 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from google.api_core import exceptions as google_exceptions
-from google.cloud import texttospeech_v1
+import httpx
 
 from app.core.config import get_settings
 
 logger = logging.getLogger("aloft.clients.tts")
 
-# Transient/server-side failures worth a retry. NOT included:
-# Unauthenticated, PermissionDenied, InvalidArgument -- a wrong voice name
-# or missing credentials will fail identically every time.
-_RETRYABLE_EXCEPTIONS = (
-    google_exceptions.ServiceUnavailable,
-    google_exceptions.InternalServerError,
-    google_exceptions.ResourceExhausted,
-    google_exceptions.DeadlineExceeded,
-)
+_BASE_URL = "https://api.elevenlabs.io"
+
+# Transient server-side failures worth retrying.
+# 401 (bad key) and 422 (bad voice ID / invalid input) are not retried --
+# they will fail identically every time.
+_RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 _MAX_ATTEMPTS = 3
 _BACKOFF_BASE_SECONDS = 1.0
 
-_client: texttospeech_v1.TextToSpeechAsyncClient | None = None
-
 
 class TtsClientError(Exception):
-    """Raised when speech synthesis fails outright -- after retries are
-    exhausted, or on a non-retryable error (bad voice name, missing
-    credentials, invalid input).
+    """Raised when speech synthesis fails -- after retries are exhausted,
+    or on a non-retryable error (bad API key, invalid voice ID).
     """
-
-
-def _get_client() -> texttospeech_v1.TextToSpeechAsyncClient:
-    """Created once and reused. This client manages its own gRPC channel
-    and OAuth2 token refresh internally -- recreating it per call would
-    throw that connection reuse and token caching away for nothing.
-    """
-    global _client
-    if _client is None:
-        _client = texttospeech_v1.TextToSpeechAsyncClient()
-    return _client
 
 
 async def synthesize_speech(
     text: str,
     *,
-    language_code: str | None = None,
-    voice_name: str | None = None,
+    voice_id: str | None = None,
+    http_client: httpx.AsyncClient | None = None,
 ) -> bytes:
-    """Convert text to speech audio.
+    """Convert text to MP3 audio bytes using ElevenLabs.
 
     Args:
         text: the text to narrate.
-        language_code: BCP-47 code, e.g. "en-US". Defaults to
-            settings.tts_language_code.
-        voice_name: a specific Google voice name. Defaults to
-            settings.tts_voice_name.
+        voice_id: ElevenLabs voice ID. Defaults to settings.elevenlabs_voice_id.
+            Find voice IDs at elevenlabs.io/voice-lab or via GET /v1/voices.
+        http_client: optional injected httpx client (used in tests).
+            If not provided, a short-lived client is created for this call.
 
     Returns:
-        Raw audio bytes (MP3-encoded).
+        Raw MP3 audio bytes.
 
     Raises:
-        TtsClientError: missing/invalid credentials, an invalid voice or
-            language, or retries exhausted on a transient failure.
+        TtsClientError: bad API key, invalid voice ID, or retries exhausted.
     """
     settings = get_settings()
-    request = texttospeech_v1.SynthesizeSpeechRequest(
-        input=texttospeech_v1.SynthesisInput(text=text),
-        voice=texttospeech_v1.VoiceSelectionParams(
-            language_code=language_code or settings.tts_language_code,
-            name=voice_name or settings.tts_voice_name,
-        ),
-        audio_config=texttospeech_v1.AudioConfig(
-            audio_encoding=texttospeech_v1.AudioEncoding.MP3
-        ),
-    )
 
-    client = _get_client()
+    api_key = settings.elevenlabs_api_key
+    if api_key is None:
+        raise TtsClientError(
+            "ELEVENLABS_API_KEY is not set. Add it to your .env file."
+        )
+
+    resolved_voice_id = voice_id or settings.elevenlabs_voice_id
+    url = f"{_BASE_URL}/v1/text-to-speech/{resolved_voice_id}"
+
+    headers = {
+        "xi-api-key": api_key.get_secret_value(),
+        "Content-Type": "application/json",
+        "Accept": "audio/mpeg",
+    }
+    payload = {
+        "text": text,
+        "model_id": "eleven_multilingual_v2",
+        "output_format": "mp3_44100_128",
+    }
+
+    should_close = http_client is None
+    client = http_client or httpx.AsyncClient()
     last_error: Exception | None = None
 
-    for attempt in range(1, _MAX_ATTEMPTS + 1):
-        try:
-            response = await client.synthesize_speech(request=request)
-        except _RETRYABLE_EXCEPTIONS as exc:
-            last_error = exc
-            logger.warning(
-                "TTS synthesis retryable error, attempt %d/%d: %s",
-                attempt, _MAX_ATTEMPTS, exc,
-            )
-        except google_exceptions.GoogleAPICallError as exc:
-            raise TtsClientError(f"TTS synthesis failed (non-retryable): {exc}") from exc
-        else:
-            return response.audio_content
+    try:
+        for attempt in range(1, _MAX_ATTEMPTS + 1):
+            try:
+                response = await client.post(url, headers=headers, json=payload, timeout=30.0)
+            except httpx.RequestError as exc:
+                last_error = exc
+                logger.warning(
+                    "TTS request error, attempt %d/%d: %s", attempt, _MAX_ATTEMPTS, exc
+                )
+            else:
+                if response.status_code == 200:
+                    return response.content
 
-        if attempt < _MAX_ATTEMPTS:
-            await asyncio.sleep(_BACKOFF_BASE_SECONDS * (2 ** (attempt - 1)))
+                if response.status_code in _RETRYABLE_STATUS_CODES:
+                    last_error = TtsClientError(
+                        f"ElevenLabs returned {response.status_code}: {response.text}"
+                    )
+                    logger.warning(
+                        "TTS retryable error %d, attempt %d/%d",
+                        response.status_code, attempt, _MAX_ATTEMPTS,
+                    )
+                else:
+                    # 401, 422, etc. -- won't succeed on retry
+                    raise TtsClientError(
+                        f"TTS synthesis failed (non-retryable): "
+                        f"HTTP {response.status_code}: {response.text}"
+                    )
 
-    raise TtsClientError(f"TTS synthesis failed after {_MAX_ATTEMPTS} attempts") from last_error
+            if attempt < _MAX_ATTEMPTS:
+                await asyncio.sleep(_BACKOFF_BASE_SECONDS * (2 ** (attempt - 1)))
+    finally:
+        if should_close:
+            await client.aclose()
+
+    raise TtsClientError(
+        f"TTS synthesis failed after {_MAX_ATTEMPTS} attempts"
+    ) from last_error
