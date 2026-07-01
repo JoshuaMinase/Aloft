@@ -13,15 +13,16 @@ _redis: Redis | None = None
 
 def get_redis() -> Redis:
     if _redis is None:
-        raise RuntimeError(
-            "Redis not connected. Call connect_to_redis() at app startup first."
-        )
+        raise RuntimeError("Redis not connected. Call connect_to_redis() at app startup first.")
     return _redis
 
 
 async def connect_to_redis() -> None:
     global _redis
     settings = get_settings()
+    if not settings.redis_url:
+        logger.info("REDIS_URL not configured -- sessions will be unavailable")
+        return
     _redis = Redis.from_url(settings.redis_url, decode_responses=True)
     # Ping to fail fast if the URL is wrong
     await _redis.ping()

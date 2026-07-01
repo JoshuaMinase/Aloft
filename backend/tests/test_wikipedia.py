@@ -159,7 +159,6 @@ async def test_geosearch_does_not_retry_non_retryable_errors():
     assert route.call_count == 1  # a 404 won't change on retry -- fail fast
 
 
-
 MOCK_SUMMARY_RESPONSE = {
     "query": {
         "pages": {
@@ -265,36 +264,76 @@ LEAD_IMAGE_RESPONSE = {
     }
 }
 
-NO_LEAD_IMAGE_RESPONSE = {
-    "query": {"pages": {"12345": {"pageid": 12345, "title": "Some Article"}}}
-}
+NO_LEAD_IMAGE_RESPONSE = {"query": {"pages": {"12345": {"pageid": 12345, "title": "Some Article"}}}}
 
 GALLERY_RESPONSE = {
     "query": {
         "pages": {
             "1": {
                 "title": "File:Commons-logo.svg",
-                "imageinfo": [{"url": "https://upload.wikimedia.org/commons/Commons-logo.svg", "width": 1024, "height": 1024, "mime": "image/svg+xml"}],
+                "imageinfo": [
+                    {
+                        "url": "https://upload.wikimedia.org/commons/Commons-logo.svg",
+                        "width": 1024,
+                        "height": 1024,
+                        "mime": "image/svg+xml",
+                    }
+                ],
             },
             "2": {
                 "title": "File:Edit-icon.png",
-                "imageinfo": [{"url": "https://upload.wikimedia.org/commons/Edit-icon.png", "width": 20, "height": 20, "mime": "image/png"}],
+                "imageinfo": [
+                    {
+                        "url": "https://upload.wikimedia.org/commons/Edit-icon.png",
+                        "width": 20,
+                        "height": 20,
+                        "mime": "image/png",
+                    }
+                ],
             },
             "3": {
                 "title": "File:Cathedral_exterior.jpg",
-                "imageinfo": [{"url": "https://upload.wikimedia.org/commons/Cathedral_exterior.jpg", "width": 1600, "height": 1200, "mime": "image/jpeg"}],
+                "imageinfo": [
+                    {
+                        "url": "https://upload.wikimedia.org/commons/Cathedral_exterior.jpg",
+                        "width": 1600,
+                        "height": 1200,
+                        "mime": "image/jpeg",
+                    }
+                ],
             },
             "4": {
                 "title": "File:Cathedral_interior.jpg",
-                "imageinfo": [{"url": "https://upload.wikimedia.org/commons/Cathedral_interior.jpg", "width": 800, "height": 600, "mime": "image/jpeg"}],
+                "imageinfo": [
+                    {
+                        "url": "https://upload.wikimedia.org/commons/Cathedral_interior.jpg",
+                        "width": 800,
+                        "height": 600,
+                        "mime": "image/jpeg",
+                    }
+                ],
             },
             "5": {
                 "title": "File:Tiny_thumbnail.jpg",
-                "imageinfo": [{"url": "https://upload.wikimedia.org/commons/Tiny_thumbnail.jpg", "width": 100, "height": 100, "mime": "image/jpeg"}],
+                "imageinfo": [
+                    {
+                        "url": "https://upload.wikimedia.org/commons/Tiny_thumbnail.jpg",
+                        "width": 100,
+                        "height": 100,
+                        "mime": "image/jpeg",
+                    }
+                ],
             },
             "6": {
                 "title": "File:Diagram_of_layout.svg",
-                "imageinfo": [{"url": "https://upload.wikimedia.org/commons/Diagram_of_layout.svg", "width": 2000, "height": 2000, "mime": "image/svg+xml"}],
+                "imageinfo": [
+                    {
+                        "url": "https://upload.wikimedia.org/commons/Diagram_of_layout.svg",
+                        "width": 2000,
+                        "height": 2000,
+                        "mime": "image/svg+xml",
+                    }
+                ],
             },
         }
     }
@@ -305,7 +344,14 @@ ONLY_ICONS_GALLERY_RESPONSE = {
         "pages": {
             "1": {
                 "title": "File:Commons-logo.svg",
-                "imageinfo": [{"url": "https://upload.wikimedia.org/commons/Commons-logo.svg", "width": 1024, "height": 1024, "mime": "image/svg+xml"}],
+                "imageinfo": [
+                    {
+                        "url": "https://upload.wikimedia.org/commons/Commons-logo.svg",
+                        "width": 1024,
+                        "height": 1024,
+                        "mime": "image/svg+xml",
+                    }
+                ],
             }
         }
     }

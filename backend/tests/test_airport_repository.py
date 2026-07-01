@@ -42,13 +42,12 @@ async def test_save_airport_upserts_without_duplicating(db):
     assert cached.name == "Corrected Name"
 
 
-
 def test_lookup_static_airport_returns_known_coords():
     coords = lookup_static_airport("LHR")
     assert coords is not None
     lat, lng = coords
     assert 51.0 < lat < 52.0  # London latitude
-    assert -1.0 < lng < 0.0   # London longitude
+    assert -1.0 < lng < 0.0  # London longitude
 
 
 def test_lookup_static_airport_is_case_insensitive():

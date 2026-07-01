@@ -21,8 +21,10 @@ _FAKE_IMAGE = RawImage(url="https://example.com/a.jpg", width=800, height=600, i
 
 def _story(source_id: str) -> Story:
     return Story(
-        poi_source_id=source_id, language="en", text_content="A vivid story.",
-        style_prompt="dramatic", model_version="test-model",
+        poi_source_id=source_id,
+        language="en",
+        text_content="A vivid story.",
+        model_version="test-model",
     )
 
 
@@ -45,14 +47,20 @@ async def test_generates_content_for_every_poi(db, http_client):
     await save_pois(db, [POI_A, POI_B])
 
     with (
-        patch("app.services.content_generation_service.generate_story",
-              new=AsyncMock(side_effect=lambda c, sid, name, language: _story(sid))),
+        patch(
+            "app.services.content_generation_service.generate_story",
+            new=AsyncMock(side_effect=lambda c, sid, name, language: _story(sid)),
+        ),
         patch("app.services.content_generation_service.save_story", new=AsyncMock()),
-        patch("app.services.content_generation_service.synthesize_story_audio",
-              new=AsyncMock(return_value=b"audio")),
+        patch(
+            "app.services.content_generation_service.synthesize_story_audio",
+            new=AsyncMock(return_value=b"audio"),
+        ),
         patch("app.services.content_generation_service.save_audio", new=AsyncMock()),
-        patch("app.services.content_generation_service.get_images",
-              new=AsyncMock(return_value=[_FAKE_IMAGE])),
+        patch(
+            "app.services.content_generation_service.get_images",
+            new=AsyncMock(return_value=[_FAKE_IMAGE]),
+        ),
     ):
         results = await generate_content_for_route(
             http_client, db, ["wikipedia:1001", "wikipedia:1002"]
@@ -74,10 +82,15 @@ async def test_one_failure_does_not_stop_the_rest(db, http_client):
         return _story(sid)
 
     with (
-        patch("app.services.content_generation_service.generate_story", new=AsyncMock(side_effect=flaky)),
+        patch(
+            "app.services.content_generation_service.generate_story",
+            new=AsyncMock(side_effect=flaky),
+        ),
         patch("app.services.content_generation_service.save_story", new=AsyncMock()),
-        patch("app.services.content_generation_service.synthesize_story_audio",
-              new=AsyncMock(return_value=b"audio")),
+        patch(
+            "app.services.content_generation_service.synthesize_story_audio",
+            new=AsyncMock(return_value=b"audio"),
+        ),
         patch("app.services.content_generation_service.save_audio", new=AsyncMock()),
         patch("app.services.content_generation_service.get_images", new=AsyncMock(return_value=[])),
     ):
@@ -100,8 +113,10 @@ async def test_skips_regenerating_cached_story(db, http_client):
     mock_generate = AsyncMock()
     with (
         patch("app.services.content_generation_service.generate_story", new=mock_generate),
-        patch("app.services.content_generation_service.synthesize_story_audio",
-              new=AsyncMock(return_value=b"audio")),
+        patch(
+            "app.services.content_generation_service.synthesize_story_audio",
+            new=AsyncMock(return_value=b"audio"),
+        ),
         patch("app.services.content_generation_service.save_audio", new=AsyncMock()),
         patch("app.services.content_generation_service.get_images", new=AsyncMock(return_value=[])),
     ):
@@ -113,7 +128,9 @@ async def test_skips_regenerating_cached_story(db, http_client):
 
 @pytest.mark.asyncio
 async def test_undiscovered_poi_recorded_without_crashing_batch(db, http_client):
-    with patch("app.services.content_generation_service.get_images", new=AsyncMock(return_value=[])):
+    with patch(
+        "app.services.content_generation_service.get_images", new=AsyncMock(return_value=[])
+    ):
         results = await generate_content_for_route(http_client, db, ["wikipedia:9999"])
 
     assert results[0].story_ready is False
@@ -125,11 +142,15 @@ async def test_audio_failure_after_story_success_reports_story_ready(db, http_cl
     await save_pois(db, [POI_A])
 
     with (
-        patch("app.services.content_generation_service.generate_story",
-              new=AsyncMock(return_value=_story("wikipedia:1001"))),
+        patch(
+            "app.services.content_generation_service.generate_story",
+            new=AsyncMock(return_value=_story("wikipedia:1001")),
+        ),
         patch("app.services.content_generation_service.save_story", new=AsyncMock()),
-        patch("app.services.content_generation_service.synthesize_story_audio",
-              new=AsyncMock(side_effect=TtsClientError("quota exhausted"))),
+        patch(
+            "app.services.content_generation_service.synthesize_story_audio",
+            new=AsyncMock(side_effect=TtsClientError("quota exhausted")),
+        ),
         patch("app.services.content_generation_service.get_images", new=AsyncMock(return_value=[])),
     ):
         results = await generate_content_for_route(http_client, db, ["wikipedia:1001"])

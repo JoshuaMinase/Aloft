@@ -55,7 +55,9 @@ def no_real_sleep():
 
 @pytest.fixture(autouse=True)
 def fake_groq_key(monkeypatch):
-    fake_settings = type("S", (), {"groq_api_key": SecretStr("test-key"), "groq_model": "test-model"})()
+    fake_settings = type(
+        "S", (), {"groq_api_key": SecretStr("test-key"), "groq_model": "test-model"}
+    )()
     monkeypatch.setattr("app.clients.groq.get_settings", lambda: fake_settings)
     monkeypatch.setattr("app.services.story_service.get_settings", lambda: fake_settings)
 
@@ -75,7 +77,7 @@ async def shared_http_client() -> AsyncIterator[httpx.AsyncClient]:
 
 
 @pytest.fixture
-def test_client(mongomock_db, shared_http_client) -> Iterator[TestClient]:
+def test_client(mongomock_db, shared_http_client, auth_override) -> Iterator[TestClient]:
     app.dependency_overrides[get_database] = lambda: mongomock_db
     app.dependency_overrides[get_http_client] = lambda: shared_http_client
     yield TestClient(app)
@@ -87,9 +89,7 @@ async def test_create_story_for_a_discovered_poi(test_client, mongomock_db):
     await save_pois(mongomock_db, [CATHEDRAL_RAW])
 
     with respx.mock:
-        respx.get(WIKIPEDIA_API_URL).mock(
-            return_value=httpx.Response(200, json=CATHEDRAL_SUMMARY)
-        )
+        respx.get(WIKIPEDIA_API_URL).mock(return_value=httpx.Response(200, json=CATHEDRAL_SUMMARY))
         respx.post(GROQ_API_URL).mock(return_value=httpx.Response(200, json=GENERATED_TEXT))
 
         response = test_client.post("/pois/wikipedia:1001/story")
@@ -113,9 +113,7 @@ async def test_create_story_400_when_insufficient_facts(test_client, mongomock_d
     await save_pois(mongomock_db, [CATHEDRAL_RAW])
 
     with respx.mock:
-        respx.get(WIKIPEDIA_API_URL).mock(
-            return_value=httpx.Response(200, json=EMPTY_SUMMARY)
-        )
+        respx.get(WIKIPEDIA_API_URL).mock(return_value=httpx.Response(200, json=EMPTY_SUMMARY))
         response = test_client.post("/pois/wikipedia:1001/story")
 
     assert response.status_code == 400
@@ -126,9 +124,7 @@ async def test_create_story_accepts_language_query_param(test_client, mongomock_
     await save_pois(mongomock_db, [CATHEDRAL_RAW])
 
     with respx.mock:
-        respx.get(WIKIPEDIA_API_URL).mock(
-            return_value=httpx.Response(200, json=CATHEDRAL_SUMMARY)
-        )
+        respx.get(WIKIPEDIA_API_URL).mock(return_value=httpx.Response(200, json=CATHEDRAL_SUMMARY))
         groq_route = respx.post(GROQ_API_URL).mock(
             return_value=httpx.Response(200, json=GENERATED_TEXT)
         )
@@ -146,9 +142,7 @@ async def test_create_story_returns_cached_story_without_calling_groq(test_clien
     await save_pois(mongomock_db, [CATHEDRAL_RAW])
 
     with respx.mock:
-        respx.get(WIKIPEDIA_API_URL).mock(
-            return_value=httpx.Response(200, json=CATHEDRAL_SUMMARY)
-        )
+        respx.get(WIKIPEDIA_API_URL).mock(return_value=httpx.Response(200, json=CATHEDRAL_SUMMARY))
         groq_route = respx.post(GROQ_API_URL).mock(
             return_value=httpx.Response(200, json=GENERATED_TEXT)
         )
@@ -164,7 +158,6 @@ def test_create_story_400_for_unsupported_language(test_client):
 
     assert response.status_code == 400
     assert "Unsupported language" in response.json()["detail"]
-
 
 
 @pytest.mark.asyncio

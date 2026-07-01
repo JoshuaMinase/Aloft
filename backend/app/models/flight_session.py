@@ -14,4 +14,4 @@ class FlightSession(BaseModel):
     last_updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
     def to_mongo_dict(self) -> dict:
-        return self.model_dump()
+        return self.model_dump(mode="json")

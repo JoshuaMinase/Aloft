@@ -25,7 +25,7 @@ async def mongomock_db():
 
 
 @pytest.fixture
-def test_client(mongomock_db) -> Iterator[TestClient]:
+def test_client(mongomock_db, auth_override) -> Iterator[TestClient]:
     app.dependency_overrides[get_database] = lambda: mongomock_db
     app.dependency_overrides[get_http_client] = lambda: httpx.AsyncClient()
     yield TestClient(app)
@@ -42,10 +42,16 @@ async def test_generate_content_returns_results_for_known_route(test_client, mon
     bundle = await save_route_bundle(mongomock_db, ADD, DXB, ["wikipedia:1001", "wikipedia:1002"])
 
     fake_results = [
-        PoiContentResult(poi_source_id="wikipedia:1001", story_ready=True, audio_ready=True, images_found=2),
-        PoiContentResult(poi_source_id="wikipedia:1002", story_ready=True, audio_ready=True, images_found=1),
+        PoiContentResult(
+            poi_source_id="wikipedia:1001", story_ready=True, audio_ready=True, images_found=2
+        ),
+        PoiContentResult(
+            poi_source_id="wikipedia:1002", story_ready=True, audio_ready=True, images_found=1
+        ),
     ]
-    with patch("app.routers.content.generate_content_for_route", new=AsyncMock(return_value=fake_results)):
+    with patch(
+        "app.routers.content.generate_content_for_route", new=AsyncMock(return_value=fake_results)
+    ):
         response = test_client.post(f"/routes/{bundle.route_key}/content")
 
     assert response.status_code == 200

@@ -66,7 +66,10 @@ async def chat_completion(
             retry_after_override = _retry_after_seconds(exc.response)
             logger.warning(
                 "Groq got retryable status %d, attempt %d/%d (retry-after=%s)",
-                exc.response.status_code, attempt, _MAX_ATTEMPTS, retry_after_override,
+                exc.response.status_code,
+                attempt,
+                _MAX_ATTEMPTS,
+                retry_after_override,
             )
         else:
             return _extract_text(response)
@@ -97,6 +100,4 @@ def _extract_text(response: httpx.Response) -> str:
     try:
         return response.json()["choices"][0]["message"]["content"]
     except (KeyError, IndexError, ValueError) as exc:
-        raise GroqClientError(
-            f"Unexpected Groq response shape: {response.text[:200]}"
-        ) from exc
+        raise GroqClientError(f"Unexpected Groq response shape: {response.text[:200]}") from exc

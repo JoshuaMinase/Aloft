@@ -24,7 +24,9 @@ from app.services.story_repository import save_story
 ADD = (8.9806, 38.7992)
 DXB = (25.2532, 55.3657)
 
-CATHEDRAL = RawPoi(title="Holy Trinity Cathedral", page_id=1001, lat=9.0177, lng=38.7669, distance_m=450.2)
+CATHEDRAL = RawPoi(
+    title="Holy Trinity Cathedral", page_id=1001, lat=9.0177, lng=38.7669, distance_m=450.2
+)
 MUSEUM = RawPoi(title="National Museum", page_id=1002, lat=9.0339, lng=38.7611, distance_m=1820.7)
 
 
@@ -38,19 +40,22 @@ async def db():
 
 @pytest.fixture(autouse=True)
 def fake_settings(tmp_path, monkeypatch):
-    s = type("S", (), {"audio_storage_dir": str(tmp_path), "tts_voice_name": "en-US-Wavenet-D"})()
+    s = type("S", (), {"audio_storage_dir": str(tmp_path), "elevenlabs_voice_id": "en-US-Wavenet-D", "r2_configured": False})()
     monkeypatch.setattr("app.services.audio_repository.get_settings", lambda: s)
-    monkeypatch.setattr("app.services.download_service.get_settings", lambda: s)
+    monkeypatch.setattr("app.services.audio_service.get_settings", lambda: s)
 
 
 def _story(source_id: str, text: str = "A story.") -> Story:
     return Story(
-        poi_source_id=source_id, language="en", text_content=text,
-        style_prompt="dramatic", model_version="test-model",
+        poi_source_id=source_id,
+        language="en",
+        text_content=text,
+        model_version="test-model",
     )
 
 
 # --- Service tests ---
+
 
 @pytest.mark.asyncio
 async def test_raises_for_unknown_route(db):
@@ -147,8 +152,9 @@ def zf_manifest(zip_bytes: bytes) -> str:
 
 # --- Router tests ---
 
+
 @pytest.fixture
-def test_client(db) -> Iterator[TestClient]:
+def test_client(db, auth_override) -> Iterator[TestClient]:
     app.dependency_overrides[get_database] = lambda: db
     app.dependency_overrides[get_http_client] = lambda: httpx.AsyncClient()
     yield TestClient(app)

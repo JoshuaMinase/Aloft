@@ -9,13 +9,29 @@ from app.clients.aviationstack import AVIATIONSTACK_BASE_URL
 from app.services.flight_resolution import resolve_flight_route
 
 FLIGHT_RESPONSE = {
-    "data": [{"flight_status": "scheduled", "departure": {"iata": "ADD"}, "arrival": {"iata": "DXB"}}]
+    "data": [
+        {"flight_status": "scheduled", "departure": {"iata": "ADD"}, "arrival": {"iata": "DXB"}}
+    ]
 }
 ADD_AIRPORT_RESPONSE = {
-    "data": [{"iata_code": "ADD", "airport_name": "Bole International", "latitude": "8.9806", "longitude": "38.7992"}]
+    "data": [
+        {
+            "iata_code": "ADD",
+            "airport_name": "Bole International",
+            "latitude": "8.9806",
+            "longitude": "38.7992",
+        }
+    ]
 }
 DXB_AIRPORT_RESPONSE = {
-    "data": [{"iata_code": "DXB", "airport_name": "Dubai International", "latitude": "25.2532", "longitude": "55.3657"}]
+    "data": [
+        {
+            "iata_code": "DXB",
+            "airport_name": "Dubai International",
+            "latitude": "25.2532",
+            "longitude": "55.3657",
+        }
+    ]
 }
 
 
@@ -78,10 +94,19 @@ async def test_resolve_flight_route_caches_airport_coordinates(db):
 @pytest.mark.asyncio
 async def test_shared_airport_only_fetched_once_across_different_routes(db):
     second_flight_response = {
-        "data": [{"flight_status": "scheduled", "departure": {"iata": "ADD"}, "arrival": {"iata": "LHR"}}]
+        "data": [
+            {"flight_status": "scheduled", "departure": {"iata": "ADD"}, "arrival": {"iata": "LHR"}}
+        ]
     }
     lhr_airport_response = {
-        "data": [{"iata_code": "LHR", "airport_name": "Heathrow", "latitude": "51.4700", "longitude": "-0.4543"}]
+        "data": [
+            {
+                "iata_code": "LHR",
+                "airport_name": "Heathrow",
+                "latitude": "51.4700",
+                "longitude": "-0.4543",
+            }
+        ]
     }
 
     def airport_handler(request: httpx.Request) -> httpx.Response:
@@ -106,8 +131,8 @@ async def test_shared_airport_only_fetched_once_across_different_routes(db):
                 side_effect=airport_handler
             )
 
-            await resolve_flight_route(client, db, "ET409")      # ADD + DXB
-            await resolve_flight_route(client, db, "OTHER123")   # ADD (cached) + LHR
+            await resolve_flight_route(client, db, "ET409")  # ADD + DXB
+            await resolve_flight_route(client, db, "OTHER123")  # ADD (cached) + LHR
 
     assert flight_route.call_count == 2
     # 3 unique airports (ADD, DXB, LHR) -- ADD shared, only fetched once.

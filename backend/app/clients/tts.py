@@ -62,9 +62,7 @@ async def synthesize_speech(
 
     api_key = settings.elevenlabs_api_key
     if api_key is None:
-        raise TtsClientError(
-            "ELEVENLABS_API_KEY is not set. Add it to your .env file."
-        )
+        raise TtsClientError("ELEVENLABS_API_KEY is not set. Add it to your .env file.")
 
     resolved_voice_id = voice_id or settings.elevenlabs_voice_id
     url = f"{_BASE_URL}/v1/text-to-speech/{resolved_voice_id}"
@@ -90,9 +88,7 @@ async def synthesize_speech(
                 response = await client.post(url, headers=headers, json=payload, timeout=30.0)
             except httpx.RequestError as exc:
                 last_error = exc
-                logger.warning(
-                    "TTS request error, attempt %d/%d: %s", attempt, _MAX_ATTEMPTS, exc
-                )
+                logger.warning("TTS request error, attempt %d/%d: %s", attempt, _MAX_ATTEMPTS, exc)
             else:
                 if response.status_code == 200:
                     return response.content
@@ -103,7 +99,9 @@ async def synthesize_speech(
                     )
                     logger.warning(
                         "TTS retryable error %d, attempt %d/%d",
-                        response.status_code, attempt, _MAX_ATTEMPTS,
+                        response.status_code,
+                        attempt,
+                        _MAX_ATTEMPTS,
                     )
                 else:
                     # 401, 422, etc. -- won't succeed on retry
@@ -118,6 +116,4 @@ async def synthesize_speech(
         if should_close:
             await client.aclose()
 
-    raise TtsClientError(
-        f"TTS synthesis failed after {_MAX_ATTEMPTS} attempts"
-    ) from last_error
+    raise TtsClientError(f"TTS synthesis failed after {_MAX_ATTEMPTS} attempts") from last_error

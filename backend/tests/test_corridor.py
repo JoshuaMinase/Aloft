@@ -88,7 +88,6 @@ def test_point_in_corridor_handles_lat_lng_order_correctly():
     assert point_in_corridor(corridor, mid_lat, mid_lng)
 
 
-
 def test_sample_points_by_spacing_endpoints_match_departure_and_arrival():
     points = sample_points_by_spacing(ADD, DXB, spacing_km=200)
     assert points[0] == ADD

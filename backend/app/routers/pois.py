@@ -25,15 +25,16 @@ from __future__ import annotations
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from motor.motor_asyncio import AsyncIOMotorDatabase
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, model_validator
 
-from app.core.dependencies import get_database, get_http_client
+from app.core.dependencies import get_current_user, get_database, get_http_client
+from app.models.user import User
 from app.services.airport_repository import get_cached_airport, lookup_static_airport
 from app.services.poi_repository import save_pois
 from app.services.poi_service import find_pois_along_corridor
 from app.services.route_bundle_repository import save_route_bundle
 
-router = APIRouter(prefix="/routes", tags=["pois"])
+router = APIRouter(prefix="/routes", tags=["discovery"])
 
 
 class Coordinates(BaseModel):
@@ -42,6 +43,25 @@ class Coordinates(BaseModel):
 
 
 class DiscoverPoisRequest(BaseModel):
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "summary": "By IATA codes",
+                    "value": {"departure_iata": "ADD", "arrival_iata": "DXB", "width_km": 20},
+                },
+                {
+                    "summary": "By coordinates",
+                    "value": {
+                        "departure": {"lat": 8.98, "lng": 38.79},
+                        "arrival": {"lat": 25.25, "lng": 55.36},
+                        "width_km": 20,
+                    },
+                },
+            ]
+        }
+    }
+
     # Option A: lat/lng directly
     departure: Coordinates | None = None
     arrival: Coordinates | None = None
@@ -50,7 +70,7 @@ class DiscoverPoisRequest(BaseModel):
     departure_iata: str | None = None
     arrival_iata: str | None = None
 
-    width_km: float = 20.0
+    width_km: float = Field(default=20.0, ge=0.1, le=500.0, description="Corridor width in km (0.1–500)")
 
     @model_validator(mode="after")
     def check_inputs(self) -> DiscoverPoisRequest:
@@ -62,9 +82,7 @@ class DiscoverPoisRequest(BaseModel):
                 "or departure_iata/arrival_iata airport codes."
             )
         if has_coords and has_iata:
-            raise ValueError(
-                "Provide coordinates or IATA codes, not both."
-            )
+            raise ValueError("Provide coordinates or IATA codes, not both.")
         return self
 
 
@@ -76,20 +94,31 @@ class DiscoverPoisResponse(BaseModel):
     pois_newly_inserted: int
 
 
-@router.post("/pois", response_model=DiscoverPoisResponse)
+@router.post(
+    "/pois",
+    response_model=DiscoverPoisResponse,
+    summary="Discover POIs along a flight route",
+)
 async def discover_pois(
     body: DiscoverPoisRequest,
+    _: User = Depends(get_current_user),
     client: httpx.AsyncClient = Depends(get_http_client),
     db: AsyncIOMotorDatabase = Depends(get_database),
 ) -> DiscoverPoisResponse:
-    """Discover POIs along a flight route.
+    """Discover Points of Interest along a flight corridor.
 
-    Supply either lat/lng coordinates directly, or IATA airport codes.
+    Supply either **lat/lng coordinates** directly, or **IATA airport codes**.
+
     IATA codes are resolved against a bundled static dataset (~80 major
-    airports) and the local MongoDB cache -- no AviationStack request is
+    airports) and the local MongoDB cache — no AviationStack request is
     made here. If an IATA code isn't found in either, a 422 is returned;
     in that case use lat/lng directly or look it up first via
-    POST /flights/{flight_iata}/pois.
+    `POST /flights/{flight_iata}/pois` to populate the cache.
+
+    The response includes a `route_key` you pass to subsequent calls:
+    - `POST /routes/{route_key}/content` — generate stories + audio
+    - `GET /routes/{route_key}/download` — download offline bundle
+    - `POST /sessions` — start a live session
     """
     if body.departure_iata is not None:
         # IATA path -- resolve codes to coords
@@ -97,7 +126,7 @@ async def discover_pois(
         arrival = await _resolve_iata(db, body.arrival_iata)  # type: ignore[arg-type]
     else:
         departure = (body.departure.lat, body.departure.lng)  # type: ignore[union-attr]
-        arrival = (body.arrival.lat, body.arrival.lng)        # type: ignore[union-attr]
+        arrival = (body.arrival.lat, body.arrival.lng)  # type: ignore[union-attr]
 
     try:
         pois = await find_pois_along_corridor(
@@ -106,8 +135,7 @@ async def discover_pois(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    inserted = await save_pois(db, pois)
-    poi_source_ids = [f"wikipedia:{poi.page_id}" for poi in pois]
+    inserted, poi_source_ids = await save_pois(db, pois)
     bundle = await save_route_bundle(db, departure, arrival, poi_source_ids)
 
     return DiscoverPoisResponse(

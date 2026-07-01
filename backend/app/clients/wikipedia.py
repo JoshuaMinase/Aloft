@@ -70,11 +70,31 @@ _ALLOWED_IMAGE_MIME_TYPES = {"image/jpeg", "image/png"}
 # any real photos. Filtered by filename substring since Wikipedia doesn't
 # tag them as "interface chrome" in any structured way the API exposes.
 _EXCLUDED_FILENAME_SUBSTRINGS = (
-    "commons-logo", "wiktionary", "wikidata-logo", "wikinews", "wikiquote",
-    "edit-icon", "icon_", "_icon", "question_book", "ambox", "padlock",
-    "disambig", "wiki_letter", "p_vip", "merge-arrow", "octagon-",
-    "red_pencil", "loudspeaker", "speakerlink", "crystal_clear",
-    "symbol_", "text_document", "folder_", "ablogo", "ok-icon",
+    "commons-logo",
+    "wiktionary",
+    "wikidata-logo",
+    "wikinews",
+    "wikiquote",
+    "edit-icon",
+    "icon_",
+    "_icon",
+    "question_book",
+    "ambox",
+    "padlock",
+    "disambig",
+    "wiki_letter",
+    "p_vip",
+    "merge-arrow",
+    "octagon-",
+    "red_pencil",
+    "loudspeaker",
+    "speakerlink",
+    "crystal_clear",
+    "symbol_",
+    "text_document",
+    "folder_",
+    "ablogo",
+    "ok-icon",
 )
 
 
@@ -102,7 +122,9 @@ async def geosearch(
         "gslimit": limit,
         "format": "json",
     }
-    response = await _request_with_retries(client, params, log_context=f"geosearch near ({lat}, {lng})")
+    response = await _request_with_retries(
+        client, params, log_context=f"geosearch near ({lat}, {lng})"
+    )
     return _parse_geosearch_response(response, lat, lng)
 
 
@@ -119,9 +141,7 @@ async def get_summary(client: httpx.AsyncClient, title: str) -> str:
     return _parse_summary_response(response, title)
 
 
-async def get_images(
-    client: httpx.AsyncClient, title: str, max_images: int = 4
-) -> list[RawImage]:
+async def get_images(client: httpx.AsyncClient, title: str, max_images: int = 4) -> list[RawImage]:
     """Fetch real photos for a Wikipedia article -- never AI-generated,
     never a generic fallback. Empty list means no real image exists, not an error.
 
@@ -175,7 +195,9 @@ async def _get_lead_image(client: httpx.AsyncClient, title: str) -> RawImage | N
     if original is None:
         return None
     return RawImage(
-        url=original["source"], width=original["width"], height=original["height"],
+        url=original["source"],
+        width=original["width"],
+        height=original["height"],
         is_lead_image=True,
     )
 
@@ -202,7 +224,9 @@ async def _get_gallery_images(client: httpx.AsyncClient, title: str) -> list[Raw
             continue
         images.append(
             RawImage(
-                url=imageinfo["url"], width=imageinfo["width"], height=imageinfo["height"],
+                url=imageinfo["url"],
+                width=imageinfo["width"],
+                height=imageinfo["height"],
                 is_lead_image=False,
             )
         )
@@ -240,7 +264,10 @@ async def _request_with_retries(
             last_error = exc
             logger.warning(
                 "Wikipedia %s network error, attempt %d/%d: %s",
-                log_context, attempt, _MAX_ATTEMPTS, exc,
+                log_context,
+                attempt,
+                _MAX_ATTEMPTS,
+                exc,
             )
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code not in _RETRYABLE_STATUS_CODES:
@@ -251,7 +278,10 @@ async def _request_with_retries(
             last_error = exc
             logger.warning(
                 "Wikipedia %s got retryable status %d, attempt %d/%d",
-                log_context, exc.response.status_code, attempt, _MAX_ATTEMPTS,
+                log_context,
+                exc.response.status_code,
+                attempt,
+                _MAX_ATTEMPTS,
             )
         else:
             return response
@@ -286,7 +316,9 @@ def _parse_geosearch_response(response: httpx.Response, lat: float, lng: float) 
         except KeyError as exc:
             logger.warning(
                 "Skipping malformed geosearch result near (%s, %s): missing key %s",
-                lat, lng, exc,
+                lat,
+                lng,
+                exc,
             )
     return pois
 

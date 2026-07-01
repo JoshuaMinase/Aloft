@@ -1,8 +1,15 @@
 from __future__ import annotations
 
 import io
+import sys
 
-from pydub import AudioSegment
+# Handle Python 3.13 compatibility - audioop was removed
+try:
+    from pydub import AudioSegment
+    _PYDUB_AVAILABLE = True
+except (ImportError, ModuleNotFoundError):
+    _PYDUB_AVAILABLE = False
+    AudioSegment = None
 
 _MUSIC_VOLUME_REDUCTION_DB = 18.0
 _FADE_MS = 1500
@@ -18,8 +25,16 @@ def mix_narration_with_music(narration_bytes: bytes, music_file_path: str) -> by
     Music is lowered 18dB, faded in/out, and looped or trimmed to match
     narration duration. Output format matches narration input format.
 
-    Raises AudioMixingError if either input can't be decoded.
+    Raises AudioMixingError if either input can't be decoded or if pydub
+    is not available (Python 3.13+ compatibility).
     """
+    if not _PYDUB_AVAILABLE:
+        raise AudioMixingError(
+            "Audio mixing requires pydub, which is not compatible with Python 3.13+. "
+            "Please use Python 3.12 or earlier for audio mixing functionality, "
+            "or install the audioop compatibility package."
+        )
+
     fmt = _detect_format(narration_bytes)
     try:
         narration = AudioSegment.from_file(io.BytesIO(narration_bytes), format=fmt)
@@ -40,6 +55,8 @@ def mix_narration_with_music(narration_bytes: bytes, music_file_path: str) -> by
 
 
 def _fit_to_duration(music: AudioSegment, target_ms: int) -> AudioSegment:
+    if not _PYDUB_AVAILABLE:
+        raise AudioMixingError("Audio mixing not available - pydub incompatible with Python 3.13+")
     if len(music) == 0:
         return AudioSegment.silent(duration=target_ms)
     if len(music) >= target_ms:

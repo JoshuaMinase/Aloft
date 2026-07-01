@@ -48,9 +48,7 @@ def http_client():
 @pytest.mark.asyncio
 @respx.mock
 async def test_synthesize_speech_returns_audio_bytes(http_client):
-    respx.post(_TTS_URL).mock(
-        return_value=httpx.Response(200, content=b"fake-mp3-bytes")
-    )
+    respx.post(_TTS_URL).mock(return_value=httpx.Response(200, content=b"fake-mp3-bytes"))
 
     audio = await synthesize_speech(
         "A cathedral rises above the hills.",
@@ -64,9 +62,7 @@ async def test_synthesize_speech_returns_audio_bytes(http_client):
 @pytest.mark.asyncio
 @respx.mock
 async def test_synthesize_speech_sends_correct_headers(http_client):
-    route = respx.post(_TTS_URL).mock(
-        return_value=httpx.Response(200, content=b"audio")
-    )
+    route = respx.post(_TTS_URL).mock(return_value=httpx.Response(200, content=b"audio"))
 
     await synthesize_speech("Some text", voice_id=_VOICE_ID, http_client=http_client)
 
@@ -106,9 +102,7 @@ async def test_synthesize_speech_retries_on_503_then_succeeds(http_client):
 @pytest.mark.asyncio
 @respx.mock
 async def test_synthesize_speech_raises_after_exhausting_retries(http_client):
-    respx.post(_TTS_URL).mock(
-        return_value=httpx.Response(503, text="still down")
-    )
+    respx.post(_TTS_URL).mock(return_value=httpx.Response(503, text="still down"))
 
     with pytest.raises(TtsClientError, match="3 attempts"):
         await synthesize_speech("Some text", voice_id=_VOICE_ID, http_client=http_client)

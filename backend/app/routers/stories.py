@@ -5,7 +5,8 @@ from fastapi import APIRouter, Depends, HTTPException, Path
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pydantic import BaseModel
 
-from app.core.dependencies import get_database, get_http_client
+from app.core.dependencies import get_current_user, get_database, get_http_client
+from app.models.user import User
 from app.services.poi_repository import get_poi
 from app.services.story_repository import get_story, save_story
 from app.services.story_service import (
@@ -23,14 +24,32 @@ class StoryResponse(BaseModel):
     text_content: str
 
 
-@router.post("/{source_id}/story", response_model=StoryResponse)
+@router.post(
+    "/{source_id}/story",
+    response_model=StoryResponse,
+    summary="Generate a narration story for a POI",
+)
 async def create_story(
-    source_id: str = Path(..., max_length=200),
+    source_id: str = Path(..., max_length=200, description="POI source ID, e.g. `wikipedia:12345`"),
     language: str = "en",
     force: bool = False,
+    _: User = Depends(get_current_user),
     client: httpx.AsyncClient = Depends(get_http_client),
     db: AsyncIOMotorDatabase = Depends(get_database),
 ) -> StoryResponse:
+    """Generate a spoken-word narration story for a previously discovered POI.
+
+    Uses Groq (LLaMA 3) to produce a 2–3 sentence narrative suitable for
+    reading aloud while a passenger looks out the aircraft window.
+
+    - Results are cached in MongoDB — the same POI + language combination
+      returns the cached result on subsequent calls.
+    - Pass `force=true` to regenerate (useful after editing the prompt).
+    - 404 if the POI hasn't been discovered yet — run `POST /routes/pois` first.
+
+    Supported languages: en, ar, fr, de, es, zh, hi, am (and others supported
+    by LLaMA 3 — pass any BCP-47 code and it will try).
+    """
     if language not in supported_languages():
         raise HTTPException(
             status_code=400,

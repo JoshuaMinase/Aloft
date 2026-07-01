@@ -47,7 +47,7 @@ async def mongomock_db():
 
 
 @pytest.fixture
-def test_client(mongomock_db) -> Iterator[TestClient]:
+def test_client(mongomock_db, auth_override) -> Iterator[TestClient]:
     app.dependency_overrides[get_database] = lambda: mongomock_db
     app.dependency_overrides[get_http_client] = lambda: httpx.AsyncClient()
     yield TestClient(app)
@@ -55,6 +55,7 @@ def test_client(mongomock_db) -> Iterator[TestClient]:
 
 
 # ── Static airport lookup (pure, no I/O) ─────────────────────────────────────
+
 
 def test_lookup_static_airport_returns_coords_for_known_code():
     coords = lookup_static_airport("ADD")
@@ -84,6 +85,7 @@ def test_lookup_static_airport_covers_dxb():
 
 # ── lat/lng path (existing, must still work) ─────────────────────────────────
 
+
 def test_health_check():
     client = TestClient(app)
     response = client.get("/health")
@@ -93,9 +95,7 @@ def test_health_check():
 
 def test_discover_pois_returns_counts_and_persists(test_client, mongomock_db):
     with respx.mock:
-        respx.get(WIKIPEDIA_API_URL).mock(
-            return_value=httpx.Response(200, json=FIXED_RESPONSE)
-        )
+        respx.get(WIKIPEDIA_API_URL).mock(return_value=httpx.Response(200, json=FIXED_RESPONSE))
         response = test_client.post(
             "/routes/pois",
             json={"departure": ADD, "arrival": DXB, "width_km": 20},
@@ -109,12 +109,8 @@ def test_discover_pois_returns_counts_and_persists(test_client, mongomock_db):
 
 def test_discover_pois_rerun_does_not_duplicate(test_client):
     with respx.mock:
-        respx.get(WIKIPEDIA_API_URL).mock(
-            return_value=httpx.Response(200, json=FIXED_RESPONSE)
-        )
-        test_client.post(
-            "/routes/pois", json={"departure": ADD, "arrival": DXB, "width_km": 20}
-        )
+        respx.get(WIKIPEDIA_API_URL).mock(return_value=httpx.Response(200, json=FIXED_RESPONSE))
+        test_client.post("/routes/pois", json={"departure": ADD, "arrival": DXB, "width_km": 20})
         second = test_client.post(
             "/routes/pois", json={"departure": ADD, "arrival": DXB, "width_km": 20}
         )
@@ -131,11 +127,12 @@ def test_discover_pois_rejects_degenerate_route_with_400(test_client):
     assert "same point" in response.json()["detail"]
 
 
-def test_discover_pois_rejects_invalid_width_with_400(test_client):
+def test_discover_pois_rejects_invalid_width_with_422(test_client):
+    # width_km < 0.1 is rejected by Pydantic Field validation (ge=0.1)
     response = test_client.post(
         "/routes/pois", json={"departure": ADD, "arrival": DXB, "width_km": -5}
     )
-    assert response.status_code == 400
+    assert response.status_code == 422
 
 
 def test_discover_pois_rejects_malformed_request_body(test_client):
@@ -146,26 +143,24 @@ def test_discover_pois_rejects_malformed_request_body(test_client):
 
 def test_discover_pois_returns_a_usable_route_key(test_client):
     with respx.mock:
-        respx.get(WIKIPEDIA_API_URL).mock(
-            return_value=httpx.Response(200, json=FIXED_RESPONSE)
-        )
+        respx.get(WIKIPEDIA_API_URL).mock(return_value=httpx.Response(200, json=FIXED_RESPONSE))
         response = test_client.post(
             "/routes/pois", json={"departure": ADD, "arrival": DXB, "width_km": 20}
         )
 
     from app.services.route_bundle_repository import make_route_key
+
     expected_key = make_route_key((ADD["lat"], ADD["lng"]), (DXB["lat"], DXB["lng"]))
     assert response.json()["route_key"] == expected_key
 
 
 # ── IATA path (new) ───────────────────────────────────────────────────────────
 
+
 def test_discover_pois_by_iata_uses_static_dataset(test_client):
     """ADD and DXB are in the static dataset -- no AviationStack call needed."""
     with respx.mock:
-        respx.get(WIKIPEDIA_API_URL).mock(
-            return_value=httpx.Response(200, json=FIXED_RESPONSE)
-        )
+        respx.get(WIKIPEDIA_API_URL).mock(return_value=httpx.Response(200, json=FIXED_RESPONSE))
         response = test_client.post(
             "/routes/pois",
             json={"departure_iata": "ADD", "arrival_iata": "DXB", "width_km": 20},
@@ -176,15 +171,13 @@ def test_discover_pois_by_iata_uses_static_dataset(test_client):
     assert body["pois_found"] == 2
     # Coords come from the static dataset -- check they're in the right ballpark
     dep_lat, dep_lng = body["departure"]
-    assert 8.0 < dep_lat < 10.0   # Addis Ababa latitude
+    assert 8.0 < dep_lat < 10.0  # Addis Ababa latitude
     assert 37.0 < dep_lng < 40.0  # Addis Ababa longitude
 
 
 def test_discover_pois_by_iata_is_case_insensitive(test_client):
     with respx.mock:
-        respx.get(WIKIPEDIA_API_URL).mock(
-            return_value=httpx.Response(200, json=FIXED_RESPONSE)
-        )
+        respx.get(WIKIPEDIA_API_URL).mock(return_value=httpx.Response(200, json=FIXED_RESPONSE))
         response = test_client.post(
             "/routes/pois",
             json={"departure_iata": "add", "arrival_iata": "dxb"},
@@ -197,6 +190,7 @@ def test_discover_pois_by_iata_uses_db_cache_when_not_in_static_dataset(test_cli
     """An IATA code not in the static dataset should still work if it's
     been cached in the DB from a prior AviationStack lookup.
     """
+
     async def seed_cache():
         # ZZZ is a made-up code, definitely not in the static dataset
         await save_airport(
@@ -209,12 +203,11 @@ def test_discover_pois_by_iata_uses_db_cache_when_not_in_static_dataset(test_cli
         )
 
     import asyncio
+
     asyncio.get_event_loop().run_until_complete(seed_cache())
 
     with respx.mock:
-        respx.get(WIKIPEDIA_API_URL).mock(
-            return_value=httpx.Response(200, json=FIXED_RESPONSE)
-        )
+        respx.get(WIKIPEDIA_API_URL).mock(return_value=httpx.Response(200, json=FIXED_RESPONSE))
         response = test_client.post(
             "/routes/pois",
             json={"departure_iata": "ZZZ", "arrival_iata": "ZZY"},
@@ -240,8 +233,10 @@ def test_discover_pois_rejects_mixing_coords_and_iata(test_client):
     response = test_client.post(
         "/routes/pois",
         json={
-            "departure": ADD, "arrival": DXB,
-            "departure_iata": "ADD", "arrival_iata": "DXB",
+            "departure": ADD,
+            "arrival": DXB,
+            "departure_iata": "ADD",
+            "arrival_iata": "DXB",
         },
     )
     assert response.status_code == 422

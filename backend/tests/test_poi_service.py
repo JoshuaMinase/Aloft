@@ -32,9 +32,7 @@ def no_real_sleep():
 async def test_dedupes_pois_seen_from_multiple_overlapping_sample_points():
     async with httpx.AsyncClient() as client:
         with respx.mock:
-            respx.get(WIKIPEDIA_API_URL).mock(
-                return_value=httpx.Response(200, json=FIXED_RESPONSE)
-            )
+            respx.get(WIKIPEDIA_API_URL).mock(return_value=httpx.Response(200, json=FIXED_RESPONSE))
             results = await find_pois_along_corridor(client, ADD, DXB, width_km=20)
 
     page_ids = [poi.page_id for poi in results]

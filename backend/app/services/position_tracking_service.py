@@ -4,9 +4,10 @@ from app.models.poi import Poi
 from app.services.corridor import distance_km
 
 # Within this radius of a POI, it's "below the plane" and worth narrating.
-# Wider than a precise "exactly underneath" radius -- narration needs a few
-# seconds' lead time to start playing before the plane has flown past.
-DEFAULT_TRIGGER_RADIUS_KM = 8.0
+# At cruising altitude (~35,000 ft / ~10km), terrain features are visible
+# 50-100km away. 50km gives a natural lead-time so narration starts as the
+# plane approaches rather than after it has already flown past.
+DEFAULT_TRIGGER_RADIUS_KM = 50.0
 
 
 def find_next_poi_to_narrate(

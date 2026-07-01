@@ -31,6 +31,7 @@ async def _resolve_airport_coords(
 
     fetched = await get_airport(client, iata_code)
     await save_airport(
-        db, Airport(iata_code=fetched.iata_code, name=fetched.name, lat=fetched.lat, lng=fetched.lng)
+        db,
+        Airport(iata_code=fetched.iata_code, name=fetched.name, lat=fetched.lat, lng=fetched.lng),
     )
     return (fetched.lat, fetched.lng)

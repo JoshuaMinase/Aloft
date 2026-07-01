@@ -45,7 +45,7 @@ async def redis():
 
 
 @pytest.fixture
-def test_client(db, redis) -> Iterator[TestClient]:
+def test_client(db, redis, auth_override) -> Iterator[TestClient]:
     app.dependency_overrides[get_database] = lambda: db
     app.dependency_overrides[get_http_client] = lambda: httpx.AsyncClient()
     app.dependency_overrides[get_redis] = lambda: redis
@@ -87,38 +87,43 @@ async def test_position_update_triggers_nearby_poi_with_story(test_client, db):
     await save_story(
         db,
         Story(
-            poi_source_id="wikipedia:1001", language="en",
+            poi_source_id="wikipedia:1001",
+            language="en",
             text_content="A vivid story about the cathedral.",
             model_version="test-model",
         ),
     )
-    session_id = test_client.post("/sessions", json={"route_key": bundle.route_key}).json()["session_id"]
+    session_id = test_client.post("/sessions", json={"route_key": bundle.route_key}).json()[
+        "session_id"
+    ]
 
-    response = test_client.post(
-        f"/sessions/{session_id}/position", json={"lat": 9.0, "lng": 38.0}
-    )
+    response = test_client.post(f"/sessions/{session_id}/position", json={"lat": 9.0, "lng": 38.0})
 
     assert response.status_code == 200
     body = response.json()
     assert body["triggered"] is True
     assert body["narration"]["source_id"] == "wikipedia:1001"
     assert body["narration"]["text_content"] == "A vivid story about the cathedral."
+    assert body["position_source"] == "client"
+    assert body["lat_used"] == 9.0
+    assert body["lng_used"] == 38.0
 
 
 @pytest.mark.asyncio
 async def test_position_update_not_triggered_when_nothing_nearby(test_client, db):
     await save_pois(db, [NEARBY_POI])
     bundle = await save_route_bundle(db, ADD, DXB, ["wikipedia:1001"])
-    session_id = test_client.post("/sessions", json={"route_key": bundle.route_key}).json()["session_id"]
+    session_id = test_client.post("/sessions", json={"route_key": bundle.route_key}).json()[
+        "session_id"
+    ]
 
-    response = test_client.post(
-        f"/sessions/{session_id}/position", json={"lat": 0.0, "lng": 0.0}
-    )
+    response = test_client.post(f"/sessions/{session_id}/position", json={"lat": 0.0, "lng": 0.0})
 
     assert response.status_code == 200
     body = response.json()
     assert body["triggered"] is False
     assert body["narration"] is None
+    assert body["position_source"] == "client"
 
 
 @pytest.mark.asyncio
@@ -128,11 +133,15 @@ async def test_same_poi_does_not_retrigger_on_second_nearby_ping(test_client, db
     await save_story(
         db,
         Story(
-            poi_source_id="wikipedia:1001", language="en",
-            text_content="Story text.", model_version="test-model",
+            poi_source_id="wikipedia:1001",
+            language="en",
+            text_content="Story text.",
+            model_version="test-model",
         ),
     )
-    session_id = test_client.post("/sessions", json={"route_key": bundle.route_key}).json()["session_id"]
+    session_id = test_client.post("/sessions", json={"route_key": bundle.route_key}).json()[
+        "session_id"
+    ]
 
     first = test_client.post(f"/sessions/{session_id}/position", json={"lat": 9.0, "lng": 38.0})
     second = test_client.post(f"/sessions/{session_id}/position", json={"lat": 9.0, "lng": 38.0})
@@ -145,7 +154,9 @@ async def test_same_poi_does_not_retrigger_on_second_nearby_ping(test_client, db
 async def test_triggered_poi_with_no_story_still_marks_narrated(test_client, db):
     await save_pois(db, [NEARBY_POI])
     bundle = await save_route_bundle(db, ADD, DXB, ["wikipedia:1001"])
-    session_id = test_client.post("/sessions", json={"route_key": bundle.route_key}).json()["session_id"]
+    session_id = test_client.post("/sessions", json={"route_key": bundle.route_key}).json()[
+        "session_id"
+    ]
 
     first = test_client.post(f"/sessions/{session_id}/position", json={"lat": 9.0, "lng": 38.0})
     second = test_client.post(f"/sessions/{session_id}/position", json={"lat": 9.0, "lng": 38.0})

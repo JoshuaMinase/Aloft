@@ -32,6 +32,7 @@ def _wav_file(tmp_path, name: str, duration_ms: int, freq: int = 220) -> str:
 
 # --- _fit_to_duration unit tests (pure logic, no ffmpeg) ---
 
+
 def test_fit_trims_music_longer_than_target():
     music = Sine(220).to_audio_segment(duration=5000)
     result = _fit_to_duration(music, 2000)
@@ -57,6 +58,7 @@ def test_fit_exact_duration_unchanged():
 
 # --- mix_narration_with_music integration tests (WAV fixtures, no ffmpeg) ---
 
+
 def test_mix_produces_output_matching_narration_duration(tmp_path):
     narration = _wav_bytes(3000)
     music_path = _wav_file(tmp_path, "music.wav", 1000)
@@ -79,7 +81,9 @@ def test_mix_long_music_is_trimmed(tmp_path):
     narration = _wav_bytes(3000)
     music_path = _wav_file(tmp_path, "long.wav", 10000)
 
-    mixed = AudioSegment.from_file(io.BytesIO(mix_narration_with_music(narration, music_path)), format="wav")
+    mixed = AudioSegment.from_file(
+        io.BytesIO(mix_narration_with_music(narration, music_path)), format="wav"
+    )
     assert abs(len(mixed) - 3000) < 100
 
 

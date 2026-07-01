@@ -4,13 +4,12 @@ import io
 import json
 import logging
 import zipfile
-from pathlib import Path
 
 import httpx
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
-from app.core.config import get_settings
-from app.services.audio_repository import get_audio
+from app.services.audio_repository import get_audio, read_audio_bytes
+from app.services.audio_service import get_voice_id_for_language
 from app.services.poi_repository import get_poi
 from app.services.route_bundle_repository import get_route_bundle
 from app.services.story_repository import get_story
@@ -20,6 +19,19 @@ logger = logging.getLogger("aloft.services.download")
 
 class RouteNotFoundError(Exception):
     pass
+
+
+class ZipTooLargeError(Exception):
+    """Raised when the assembled ZIP would exceed MAX_ZIP_BYTES."""
+    pass
+
+
+# Hard ceiling on the in-memory ZIP buffer.
+# A typical route with 20 POIs × ~200KB audio + 4 images ~100KB each is
+# roughly 12MB.  50MB gives comfortable headroom while preventing a runaway
+# request (hundreds of POIs with multi-MB audio files) from exhausting the
+# process's RAM on free-tier infrastructure (Render, Railway, etc.).
+MAX_ZIP_BYTES = 50 * 1024 * 1024  # 50 MB
 
 
 async def build_download_zip(
@@ -39,15 +51,30 @@ async def build_download_zip(
     if bundle is None:
         raise RouteNotFoundError(f"No route found for route_key '{route_key}'")
 
-    resolved_voice = voice_name or get_settings().tts_voice_name
+    resolved_voice = voice_name or get_voice_id_for_language(language)
     manifest_entries = []
     buf = io.BytesIO()
 
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         for source_id in bundle.poi_source_ids:
-            entry = await _package_poi(client, db, zf, source_id, language, resolved_voice, include_images)
+            entry = await _package_poi(
+                client, db, zf, source_id, language, resolved_voice, include_images
+            )
             if entry is not None:
                 manifest_entries.append(entry)
+
+            # Check size after each POI to catch runaway bundles early.
+            # buf.seek(0, 2) moves to the true end of the BytesIO buffer;
+            # buf.tell() then returns the real byte count. This is more reliable
+            # than bare buf.tell() because ZipFile internally buffers writes and
+            # the position may lag behind actual bytes written until flushed.
+            buf.seek(0, 2)
+            if buf.tell() > MAX_ZIP_BYTES:
+                raise ZipTooLargeError(
+                    f"ZIP bundle exceeded {MAX_ZIP_BYTES // (1024*1024)}MB limit "
+                    f"after {len(manifest_entries)} POIs. Run content generation "
+                    "for fewer POIs or reduce audio/image count."
+                )
 
         zf.writestr(
             "manifest.json",
@@ -98,10 +125,14 @@ async def _package_poi(
     }
 
     audio = await get_audio(db, source_id, language, voice_name)
-    if audio is not None and Path(audio.file_path).exists():
-        filename = f"audio/{safe_id}.mp3"
-        zf.writestr(filename, Path(audio.file_path).read_bytes())
-        entry["audio_file"] = filename
+    if audio is not None:
+        try:
+            audio_data = await read_audio_bytes(audio)
+            filename = f"audio/{safe_id}.mp3"
+            zf.writestr(filename, audio_data)
+            entry["audio_file"] = filename
+        except (FileNotFoundError, RuntimeError) as exc:
+            logger.warning("%s has no audio — bundling text only (%s)", source_id, exc)
     else:
         logger.warning("%s has no audio — bundling text only", source_id)
 

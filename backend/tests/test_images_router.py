@@ -13,8 +13,11 @@ from app.main import app
 from app.services.poi_repository import get_poi, save_pois
 
 CATHEDRAL_RAW = RawPoi(
-    title="Holy Trinity Cathedral, Addis Ababa", page_id=1001,
-    lat=9.0177, lng=38.7669, distance_m=450.2,
+    title="Holy Trinity Cathedral, Addis Ababa",
+    page_id=1001,
+    lat=9.0177,
+    lng=38.7669,
+    distance_m=450.2,
 )
 
 LEAD_IMAGE_RESPONSE = {
@@ -72,7 +75,7 @@ async def mongomock_db():
 
 
 @pytest.fixture
-def test_client(mongomock_db) -> Iterator[TestClient]:
+def test_client(mongomock_db, auth_override) -> Iterator[TestClient]:
     app.dependency_overrides[get_database] = lambda: mongomock_db
     app.dependency_overrides[get_http_client] = lambda: httpx.AsyncClient()
     yield TestClient(app)
@@ -120,11 +123,19 @@ async def test_fetch_images_persists_image_refs_on_the_poi(test_client, mongomoc
 async def test_fetch_images_returns_empty_list_honestly_when_nothing_real_exists(
     test_client, mongomock_db
 ):
+    """When Wikipedia has no images AND Openverse has no results, return an empty list."""
     await save_pois(mongomock_db, [CATHEDRAL_RAW])
+
+    _OPENVERSE_IMAGES_URL = "https://api.openverse.org/v1/images/"
 
     with respx.mock:
         respx.get(WIKIPEDIA_API_URL).mock(
             side_effect=_images_handler(NO_LEAD_IMAGE_RESPONSE, EMPTY_GALLERY_RESPONSE)
+        )
+        # Openverse fallback is tried when Wikipedia returns nothing.
+        # Return an empty result set so the test verifies honest empty response.
+        respx.get(_OPENVERSE_IMAGES_URL).mock(
+            return_value=httpx.Response(200, json={"results": []})
         )
         response = test_client.post("/pois/wikipedia:1001/images")
 

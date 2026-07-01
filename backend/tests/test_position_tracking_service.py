@@ -7,7 +7,9 @@ CURRENT_POS = (12.5, 43.5)
 
 def _poi(source_id: str, lat: float, lng: float) -> Poi:
     return Poi(
-        name=source_id, source="wikipedia", source_id=source_id,
+        name=source_id,
+        source="wikipedia",
+        source_id=source_id,
         location={"type": "Point", "coordinates": [lng, lat]},
     )
 
@@ -60,7 +62,10 @@ def test_respects_custom_trigger_radius():
     moderately_close = _poi("wikipedia:1", CURRENT_POS[0] + 0.05, CURRENT_POS[1] + 0.05)
 
     assert find_next_poi_to_narrate(*CURRENT_POS, [moderately_close], set()) is not None
-    assert find_next_poi_to_narrate(*CURRENT_POS, [moderately_close], set(), trigger_radius_km=1.0) is None
+    assert (
+        find_next_poi_to_narrate(*CURRENT_POS, [moderately_close], set(), trigger_radius_km=1.0)
+        is None
+    )
 
 
 def test_reads_geojson_lng_lat_order_correctly():

@@ -15,7 +15,7 @@ async def db():
 
 @pytest.fixture(autouse=True)
 def fake_storage_dir(tmp_path, monkeypatch):
-    fake_settings = type("S", (), {"audio_storage_dir": str(tmp_path)})()
+    fake_settings = type("S", (), {"audio_storage_dir": str(tmp_path), "r2_configured": False})()
     monkeypatch.setattr("app.services.audio_repository.get_settings", lambda: fake_settings)
     return tmp_path
 

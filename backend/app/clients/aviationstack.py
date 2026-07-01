@@ -82,7 +82,11 @@ async def get_airport(client: httpx.AsyncClient, iata_code: str) -> AirportInfo:
 async def _request(client: httpx.AsyncClient, endpoint: str, params: dict) -> list[dict]:
     settings = get_settings()
     url = f"{AVIATIONSTACK_BASE_URL}/{endpoint}"
+    # access_key is passed as a query param (AviationStack's documented method).
+    # We build a sanitised URL for logging that omits the key so it never
+    # appears in structured logs, reverse-proxy access logs, or debug output.
     full_params = {"access_key": settings.aviationstack_api_key, **params}
+    log_params = {k: v for k, v in params.items()}  # key excluded
     timeout = httpx.Timeout(connect=5.0, read=10.0, write=5.0, pool=5.0)
 
     last_error: Exception | None = None
@@ -97,14 +101,28 @@ async def _request(client: httpx.AsyncClient, endpoint: str, params: dict) -> li
             response.raise_for_status()
         except httpx.TransportError as exc:
             last_error = exc
-            logger.warning("AviationStack %s network error, attempt %d/%d: %s", endpoint, attempt, _MAX_ATTEMPTS, exc)
+            logger.warning(
+                "AviationStack %s network error, attempt %d/%d: %s (params=%s)",
+                endpoint,
+                attempt,
+                _MAX_ATTEMPTS,
+                exc,
+                log_params,
+            )
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code not in _RETRYABLE_STATUS_CODES:
                 raise AviationStackClientError(
                     f"AviationStack returned non-retryable status {exc.response.status_code} for {endpoint}"
                 ) from exc
             last_error = exc
-            logger.warning("AviationStack %s got retryable status %d, attempt %d/%d", endpoint, exc.response.status_code, attempt, _MAX_ATTEMPTS)
+            logger.warning(
+                "AviationStack %s got retryable status %d, attempt %d/%d (params=%s)",
+                endpoint,
+                exc.response.status_code,
+                attempt,
+                _MAX_ATTEMPTS,
+                log_params,
+            )
         else:
             return response.json().get("data", [])
 
