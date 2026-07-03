@@ -7,25 +7,31 @@ authenticated user," etc.
 
 AUTH MODEL
 ══════════
-Authentication uses stateless JWT bearer tokens:
+Authentication uses stateless JWT bearer tokens with email verification:
 
-  POST /auth/signup  → create account → returns {access_token, refresh_token}
-  POST /auth/login   → verify password → returns {access_token, refresh_token}
-  POST /auth/refresh → exchange refresh token for new access token
+  POST /auth/signup              → create account → sends verification email
+  GET  /auth/verify-email        → verify email → returns {access_token, refresh_token}
+  POST /auth/resend-verification → resend verification email
+  POST /auth/login               → verify password → returns {access_token, refresh_token}
+  POST /auth/refresh             → exchange refresh token for new access token
 
 All protected routes call `get_current_user` as a dependency, which:
   1. Reads the Authorization: Bearer <token> header.
   2. Decodes + validates the JWT (signature, expiry, type claim).
-  3. Looks up the user_id in MongoDB to confirm the account exists + is active.
+  3. Looks up the user_id in MongoDB to confirm the account exists + is active + is verified.
   4. Returns the User model — available in the endpoint as a parameter.
 
 Public endpoints (no auth required):
   GET  /health
   POST /auth/signup
+  GET  /auth/verify-email
+  POST /auth/resend-verification
   POST /auth/login
   POST /auth/refresh
+  POST /auth/forgot-password
+  POST /auth/reset-password
 
-Everything else requires a valid access token.
+Everything else requires a valid access token from a verified email address.
 
 Rate limits key by user_id for authenticated endpoints (where the user is resolved),
 falling back to IP for public endpoints.
@@ -116,6 +122,13 @@ async def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+    if not user.is_verified:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Please verify your email address before accessing this resource.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
     return user
 
 
@@ -170,7 +183,7 @@ async def _get_user_if_authenticated(
 ) -> User | None:
     """Lightweight user lookup for rate limiting purposes.
 
-    Returns the User if authenticated (valid token + active account),
+    Returns the User if authenticated (valid token + active account + verified email),
     or None if not authenticated. Does NOT raise 401 for missing auth.
     """
     if credentials is None:
@@ -186,7 +199,7 @@ async def _get_user_if_authenticated(
         return None
 
     user = await get_user_by_id(db, user_id)
-    if user is None or not user.is_active:
+    if user is None or not user.is_active or not user.is_verified:
         return None
 
     return user
@@ -236,5 +249,117 @@ def position_update_rate_limit():
         "position",
         max_requests=settings.rate_limit_position_updates_per_minute,
         window_seconds=60,
+        use_user_id=True,
+    )
+
+
+def poi_discovery_rate_limit():
+    """Rate limit dependency for POST /routes/pois.
+
+    Wikipedia API is free but we should prevent abuse. POI discovery
+    can trigger multiple Wikipedia API calls per request.
+    Uses per-user limiting for authenticated endpoints.
+    """
+    settings = get_settings()
+    return rate_limit(
+        "poi_discovery",
+        max_requests=settings.rate_limit_poi_discovery_per_hour,
+        window_seconds=3600,
+        use_user_id=True,
+    )
+
+
+def story_generation_rate_limit():
+    """Rate limit dependency for POST /pois/{source_id}/story.
+
+    Individual story generation calls Groq API. While content generation
+    batch endpoint has its own limit, individual calls should also be protected.
+    Uses per-user limiting since this is an authenticated endpoint.
+    """
+    settings = get_settings()
+    return rate_limit(
+        "story_generation",
+        max_requests=settings.rate_limit_story_generation_per_hour,
+        window_seconds=3600,
+        use_user_id=True,
+    )
+
+
+def audio_synthesis_rate_limit():
+    """Rate limit dependency for POST /pois/{source_id}/audio.
+
+    Audio synthesis calls ElevenLabs API which has strict rate limits even
+    on paid tiers. Protect against abuse while allowing reasonable usage.
+    Uses per-user limiting since this is an authenticated endpoint.
+    """
+    settings = get_settings()
+    return rate_limit(
+        "audio_synthesis",
+        max_requests=settings.rate_limit_audio_synthesis_per_hour,
+        window_seconds=3600,
+        use_user_id=True,
+    )
+
+
+def download_rate_limit():
+    """Rate limit dependency for GET /routes/{route_key}/download.
+
+    Bundle downloads can be large (up to 50MB). Prevent bandwidth abuse
+    while allowing legitimate offline content access.
+    Uses per-user limiting since this is an authenticated endpoint.
+    """
+    settings = get_settings()
+    return rate_limit(
+        "download",
+        max_requests=settings.rate_limit_downloads_per_hour,
+        window_seconds=3600,
+        use_user_id=True,
+    )
+
+
+def session_creation_rate_limit():
+    """Rate limit dependency for POST /sessions.
+
+    Prevent session creation abuse while allowing legitimate multi-session
+    use cases (e.g., users testing different routes).
+    Uses per-user limiting since this is an authenticated endpoint.
+    """
+    settings = get_settings()
+    return rate_limit(
+        "session_creation",
+        max_requests=settings.rate_limit_session_creation_per_hour,
+        window_seconds=3600,
+        use_user_id=True,
+    )
+
+
+def mixed_audio_rate_limit():
+    """Rate limit dependency for POST /pois/{source_id}/audio/mixed.
+
+    Mixed audio generation involves local audio processing which can be
+    CPU-intensive. Protect against abuse while allowing reasonable usage.
+    Uses per-user limiting since this is an authenticated endpoint.
+    """
+    settings = get_settings()
+    return rate_limit(
+        "mixed_audio",
+        max_requests=settings.rate_limit_mixed_audio_per_hour,
+        window_seconds=3600,
+        use_user_id=True,
+    )
+
+
+def image_retrieval_rate_limit():
+    """Rate limit dependency for POST /pois/{source_id}/images.
+
+    Image retrieval can trigger multiple API calls (Wikipedia + Openverse fallback).
+    Protect against abuse while allowing legitimate image access.
+    Uses per-user limiting since this is an authenticated endpoint.
+    """
+    settings = get_settings()
+    return rate_limit(
+        "image_retrieval",
+        max_requests=settings.rate_limit_image_retrieval_per_hour,
+        window_seconds=3600,
         use_user_id=True,
     )

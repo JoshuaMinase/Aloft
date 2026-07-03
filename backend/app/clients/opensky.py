@@ -1,47 +1,43 @@
 """
 OpenSky Network client — live ADS-B aircraft position lookup.
 
-Queries the OpenSky REST API for the current position of an aircraft
-by its ICAO 24-bit transponder address or callsign.
+Authentication
+──────────────
+OpenSky now requires OAuth2 client-credentials flow. Create an API client
+at https://opensky-network.org → Account → API Client to get a
+client_id / client_secret pair. Leave both unset for anonymous access
+(more limited, but still functional).
+
+Token flow
+──────────
+1. POST client_id + client_secret to the OpenSky auth server.
+2. Receive a Bearer token (expires ~30 minutes).
+3. Cache the token and reuse until near expiry, then refresh.
 
 API docs: https://openskynetwork.github.io/opensky-api/rest.html
-
-No API key required for anonymous access (rate-limited to ~100 requests
-per day per IP). Using a free OpenSky account credential raises the limit
-to ~4,000 requests/day. Set OPENSKY_USERNAME and OPENSKY_PASSWORD in .env
-to use authenticated access.
-
-The endpoint we use:
-  GET https://opensky-network.org/api/states/all
-    ?icao24=<hex>    (filter by transponder address)
-    &callsign=<str>  (filter by callsign, padded to 8 chars)
-
-Response schema (relevant fields from the state vector):
-  index 0:  icao24   — ICAO 24-bit transponder address (hex string)
-  index 1:  callsign — flight callsign (8-char padded string or null)
-  index 5:  longitude  (float or null)
-  index 6:  latitude   (float or null)
-  index 7:  baro_altitude (metres, float or null)
-  index 9:  velocity (m/s, float or null)
-  index 10: true_track (degrees, float or null)
-  index 11: vertical_rate (m/s, float or null)
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import time
 
 import httpx
 from pydantic import BaseModel
+
+from app.core.config import get_settings
 
 logger = logging.getLogger("aloft.clients.opensky")
 
 _BASE_URL = "https://opensky-network.org/api"
 _STATES_ENDPOINT = f"{_BASE_URL}/states/all"
+_TOKEN_URL = "https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token"
+
 _RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 _MAX_ATTEMPTS = 3
 _BACKOFF_BASE_SECONDS = 2.0
+_TOKEN_REFRESH_MARGIN_SECONDS = 60
 
 
 class AircraftPosition(BaseModel):
@@ -69,6 +65,77 @@ class AircraftNotFoundError(OpenSkyClientError):
     coverage, or the transponder may be off. Callers should treat this
     as a soft failure and fall back to client-provided GPS.
     """
+
+
+class _TokenCache:
+    """Thread-safe (async-safe) OAuth2 token cache for OpenSky.
+
+    Stores the current access token and its expiry time. A new token
+    is fetched automatically when the current one is missing or about
+    to expire.
+    """
+
+    def __init__(self) -> None:
+        self._token: str | None = None
+        self._expires_at: float = 0.0
+        self._lock = asyncio.Lock()
+
+    async def get_token(self, client: httpx.AsyncClient) -> str | None:
+        """Return a valid Bearer token, or None if client credentials are not set."""
+        async with self._lock:
+            now = time.time()
+            if self._token and now < self._expires_at - _TOKEN_REFRESH_MARGIN_SECONDS:
+                return self._token
+
+            settings = get_settings()
+            client_id = settings.opensky_client_id
+            client_secret = (
+                settings.opensky_client_secret.get_secret_value()
+                if settings.opensky_client_secret
+                else None
+            )
+
+            if not client_id or not client_secret:
+                return None
+
+            try:
+                token = await self._fetch_token(client, client_id, client_secret)
+                self._token = token
+                self._expires_at = time.time() + 1800  # OpenSky tokens last ~30 min
+                return self._token
+            except Exception as exc:
+                logger.warning("Failed to fetch OpenSky OAuth token: %s", exc)
+                return None
+
+    async def _fetch_token(
+        self, client: httpx.AsyncClient, client_id: str, client_secret: str
+    ) -> str:
+        response = await client.post(
+            _TOKEN_URL,
+            data={
+                "grant_type": "client_credentials",
+                "client_id": client_id,
+                "client_secret": client_secret,
+            },
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            timeout=httpx.Timeout(connect=5.0, read=10.0, write=5.0, pool=5.0),
+        )
+        response.raise_for_status()
+        payload = response.json()
+        token = payload.get("access_token")
+        if not token:
+            raise OpenSkyClientError(
+                f"OpenSky token endpoint returned no access_token: {payload}"
+            )
+        return token
+
+    def invalidate(self) -> None:
+        """Drop the cached token (e.g. on 401 from the API)."""
+        self._token = None
+        self._expires_at = 0.0
+
+
+_token_cache = _TokenCache()
 
 
 def _parse_state_vector(state: list) -> AircraftPosition | None:
@@ -112,14 +179,17 @@ async def get_aircraft_position(
 
     Exactly one of `icao24` or `callsign` must be provided.
 
+    Uses OAuth2 client-credentials flow when OPENSKY_CLIENT_ID /
+    OPENSKY_CLIENT_SECRET are configured. Falls back to anonymous
+    access (no auth) when they are not set. The legacy
+    `username`/`password` parameters are accepted for backward
+    compatibility but are no longer used for API auth.
+
     Args:
         client: shared httpx AsyncClient.
         icao24: ICAO 24-bit transponder address in hex (e.g. "4b1806").
-            Most reliable identifier — unique per aircraft, never changes.
         callsign: Flight callsign (e.g. "ET308"). Padded to 8 chars
             per the OpenSky API requirement.
-        username: Optional OpenSky account username for higher rate limits.
-        password: Optional OpenSky account password.
 
     Returns:
         AircraftPosition with the current lat/lng and speed/heading.
@@ -138,10 +208,12 @@ async def get_aircraft_position(
     if icao24:
         params["icao24"] = icao24.lower()
     if callsign:
-        # OpenSky pads callsigns to exactly 8 characters
         params["callsign"] = callsign.upper().ljust(8)
 
-    auth = (username, password) if username and password else None
+    token = await _token_cache.get_token(client)
+    headers: dict[str, str] = {"User-Agent": "AloftFlightNarrationApp/0.1"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
 
     last_error: Exception | None = None
     for attempt in range(1, _MAX_ATTEMPTS + 1):
@@ -149,9 +221,8 @@ async def get_aircraft_position(
             response = await client.get(
                 _STATES_ENDPOINT,
                 params=params,
-                auth=auth,
+                headers=headers,
                 timeout=httpx.Timeout(connect=5.0, read=15.0, write=5.0, pool=5.0),
-                headers={"User-Agent": "AloftFlightNarrationApp/0.1"},
             )
         except httpx.RequestError as exc:
             last_error = exc
@@ -159,6 +230,12 @@ async def get_aircraft_position(
                 "OpenSky network error attempt %d/%d: %s", attempt, _MAX_ATTEMPTS, exc
             )
         else:
+            if response.status_code == 401 and token:
+                _token_cache.invalidate()
+                token = await _token_cache.get_token(client)
+                if token:
+                    headers["Authorization"] = f"Bearer {token}"
+                    continue
             if response.status_code == 200:
                 data = response.json()
                 states = data.get("states") or []
@@ -169,7 +246,6 @@ async def get_aircraft_position(
                         "The aircraft may be on the ground, out of ADS-B coverage, "
                         "or the transponder may be off."
                     )
-                # Take the first matching state vector
                 position = _parse_state_vector(states[0])
                 if position is None:
                     raise AircraftNotFoundError(

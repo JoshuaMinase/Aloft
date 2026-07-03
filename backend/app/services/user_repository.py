@@ -14,18 +14,41 @@ from datetime import UTC, datetime
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.models.user import User
+from app.models.role import Role
 
 logger = logging.getLogger("aloft.services.user_repository")
 
 
 def _doc_to_user(doc: dict) -> User:
     """Convert a raw MongoDB document to a User model."""
+    # Handle role conversion from string to enum
+    role_value = doc.get("role", "USER")
+    if isinstance(role_value, str):
+        try:
+            role = Role(role_value)
+        except ValueError:
+            role = Role.USER
+    else:
+        role = Role.USER
+
     return User(
         user_id=str(doc["_id"]),
         email=doc["email"],
         hashed_password=doc["hashed_password"],
+        role=role,
         is_active=doc.get("is_active", True),
+        is_verified=doc.get("is_verified", False),
+        mfa_enabled=doc.get("mfa_enabled", False),
+        mfa_secret=doc.get("mfa_secret"),
+        failed_login_attempts=doc.get("failed_login_attempts", 0),
+        locked_until=doc.get("locked_until"),
+        last_login_at=doc.get("last_login_at"),
+        last_login_ip=doc.get("last_login_ip"),
+        password_changed_at=doc.get("password_changed_at"),
+        password_reset_token=doc.get("password_reset_token"),
+        password_reset_expires=doc.get("password_reset_expires"),
         created_at=doc.get("created_at", datetime.now(UTC)),
+        updated_at=doc.get("updated_at", datetime.now(UTC)),
     )
 
 
@@ -80,5 +103,48 @@ async def create_user(db: AsyncIOMotorDatabase, email: str, hashed_password: str
         email=email_lower,
         hashed_password=hashed_password,
         is_active=True,
+        is_verified=False,
         created_at=doc["created_at"],
     )
+
+
+async def update_user(db: AsyncIOMotorDatabase, user: User) -> None:
+    """Update an existing user in the database.
+
+    Updates all fields of the user document based on the User model.
+    """
+    from bson import ObjectId
+    from bson.errors import InvalidId
+
+    try:
+        oid = ObjectId(user.user_id)
+    except InvalidId:
+        raise ValueError(f"Invalid user_id: {user.user_id}")
+
+    update_doc = {
+        "email": user.email,
+        "hashed_password": user.hashed_password,
+        "role": user.role.value if hasattr(user.role, 'value') else str(user.role),
+        "is_active": user.is_active,
+        "is_verified": user.is_verified,
+        "mfa_enabled": user.mfa_enabled,
+        "mfa_secret": user.mfa_secret,
+        "failed_login_attempts": user.failed_login_attempts,
+        "locked_until": user.locked_until,
+        "last_login_at": user.last_login_at,
+        "last_login_ip": user.last_login_ip,
+        "password_changed_at": user.password_changed_at,
+        "password_reset_token": user.password_reset_token,
+        "password_reset_expires": user.password_reset_expires,
+        "updated_at": datetime.now(UTC),
+    }
+
+    # Remove None values to avoid overwriting with null
+    update_doc = {k: v for k, v in update_doc.items() if v is not None}
+
+    result = await db.users.update_one({"_id": oid}, {"$set": update_doc})
+    
+    if result.matched_count == 0:
+        raise ValueError(f"User not found: {user.user_id}")
+    
+    logger.info("Updated user %s", user.user_id)

@@ -92,7 +92,7 @@ async def test_create_story_for_a_discovered_poi(test_client, mongomock_db):
         respx.get(WIKIPEDIA_API_URL).mock(return_value=httpx.Response(200, json=CATHEDRAL_SUMMARY))
         respx.post(GROQ_API_URL).mock(return_value=httpx.Response(200, json=GENERATED_TEXT))
 
-        response = test_client.post("/pois/wikipedia:1001/story")
+        response = test_client.post("/v1/pois/wikipedia:1001/story")
 
     assert response.status_code == 200
     body = response.json()
@@ -102,7 +102,7 @@ async def test_create_story_for_a_discovered_poi(test_client, mongomock_db):
 
 
 def test_create_story_404_when_poi_was_never_discovered(test_client):
-    response = test_client.post("/pois/wikipedia:9999/story")
+    response = test_client.post("/v1/pois/wikipedia:9999/story")
 
     assert response.status_code == 404
     assert "wikipedia:9999" in response.json()["detail"]
@@ -114,7 +114,7 @@ async def test_create_story_400_when_insufficient_facts(test_client, mongomock_d
 
     with respx.mock:
         respx.get(WIKIPEDIA_API_URL).mock(return_value=httpx.Response(200, json=EMPTY_SUMMARY))
-        response = test_client.post("/pois/wikipedia:1001/story")
+        response = test_client.post("/v1/pois/wikipedia:1001/story")
 
     assert response.status_code == 400
 
@@ -129,7 +129,7 @@ async def test_create_story_accepts_language_query_param(test_client, mongomock_
             return_value=httpx.Response(200, json=GENERATED_TEXT)
         )
 
-        response = test_client.post("/pois/wikipedia:1001/story?language=am")
+        response = test_client.post("/v1/pois/wikipedia:1001/story?language=am")
 
     assert response.json()["language"] == "am"
     sent_body = groq_route.calls[0].request.content.decode()
@@ -146,15 +146,15 @@ async def test_create_story_returns_cached_story_without_calling_groq(test_clien
         groq_route = respx.post(GROQ_API_URL).mock(
             return_value=httpx.Response(200, json=GENERATED_TEXT)
         )
-        test_client.post("/pois/wikipedia:1001/story")
-        response = test_client.post("/pois/wikipedia:1001/story")
+        test_client.post("/v1/pois/wikipedia:1001/story")
+        response = test_client.post("/v1/pois/wikipedia:1001/story")
 
     assert response.status_code == 200
     assert groq_route.call_count == 1  # Groq called exactly once, not twice
 
 
 def test_create_story_400_for_unsupported_language(test_client):
-    response = test_client.post("/pois/wikipedia:9999/story?language=xx")
+    response = test_client.post("/v1/pois/wikipedia:9999/story?language=xx")
 
     assert response.status_code == 400
     assert "Unsupported language" in response.json()["detail"]
@@ -167,13 +167,13 @@ async def test_create_story_force_regenerates_even_when_cached(test_client, mong
     with respx.mock:
         respx.get(WIKIPEDIA_API_URL).mock(return_value=httpx.Response(200, json=CATHEDRAL_SUMMARY))
         respx.post(GROQ_API_URL).mock(return_value=httpx.Response(200, json=GENERATED_TEXT))
-        test_client.post("/pois/wikipedia:1001/story")
+        test_client.post("/v1/pois/wikipedia:1001/story")
 
     new_text = {"choices": [{"message": {"content": "A freshly regenerated story."}}]}
     with respx.mock:
         respx.get(WIKIPEDIA_API_URL).mock(return_value=httpx.Response(200, json=CATHEDRAL_SUMMARY))
         groq_route = respx.post(GROQ_API_URL).mock(return_value=httpx.Response(200, json=new_text))
-        response = test_client.post("/pois/wikipedia:1001/story?force=true")
+        response = test_client.post("/v1/pois/wikipedia:1001/story?force=true")
 
     assert groq_route.call_count == 1
     assert response.json()["text_content"] == "A freshly regenerated story."

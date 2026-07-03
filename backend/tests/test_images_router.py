@@ -90,7 +90,7 @@ async def test_fetch_images_for_a_discovered_poi(test_client, mongomock_db):
         respx.get(WIKIPEDIA_API_URL).mock(
             side_effect=_images_handler(LEAD_IMAGE_RESPONSE, GALLERY_RESPONSE)
         )
-        response = test_client.post("/pois/wikipedia:1001/images")
+        response = test_client.post("/v1/pois/wikipedia:1001/images")
 
     assert response.status_code == 200
     body = response.json()
@@ -100,7 +100,7 @@ async def test_fetch_images_for_a_discovered_poi(test_client, mongomock_db):
 
 
 def test_fetch_images_404_when_poi_was_never_discovered(test_client):
-    response = test_client.post("/pois/wikipedia:9999/images")
+    response = test_client.post("/v1/pois/wikipedia:9999/images")
 
     assert response.status_code == 404
 
@@ -113,7 +113,7 @@ async def test_fetch_images_persists_image_refs_on_the_poi(test_client, mongomoc
         respx.get(WIKIPEDIA_API_URL).mock(
             side_effect=_images_handler(LEAD_IMAGE_RESPONSE, GALLERY_RESPONSE)
         )
-        test_client.post("/pois/wikipedia:1001/images")
+        test_client.post("/v1/pois/wikipedia:1001/images")
 
     poi = await get_poi(mongomock_db, "wikipedia:1001")
     assert poi.image_refs == ["https://upload.wikimedia.org/commons/cathedral_lead.jpg"]
@@ -137,7 +137,7 @@ async def test_fetch_images_returns_empty_list_honestly_when_nothing_real_exists
         respx.get(_OPENVERSE_IMAGES_URL).mock(
             return_value=httpx.Response(200, json={"results": []})
         )
-        response = test_client.post("/pois/wikipedia:1001/images")
+        response = test_client.post("/v1/pois/wikipedia:1001/images")
 
     assert response.status_code == 200
     assert response.json()["images"] == []

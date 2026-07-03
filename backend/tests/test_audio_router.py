@@ -63,7 +63,7 @@ async def test_create_audio_for_existing_story(test_client, mongomock_db):
     await save_story(mongomock_db, _make_story())
 
     with patch("app.routers.audio.synthesize_story_audio", new=AsyncMock(return_value=b"fake-mp3")):
-        response = test_client.post("/pois/wikipedia:1001/audio")
+        response = test_client.post("/v1/pois/wikipedia:1001/audio")
 
     assert response.status_code == 200
     assert response.headers["content-type"] == "audio/mpeg"
@@ -71,7 +71,7 @@ async def test_create_audio_for_existing_story(test_client, mongomock_db):
 
 
 def test_create_audio_404_when_story_does_not_exist(test_client):
-    response = test_client.post("/pois/wikipedia:9999/audio")
+    response = test_client.post("/v1/pois/wikipedia:9999/audio")
 
     assert response.status_code == 404
     assert "wikipedia:9999" in response.json()["detail"]
@@ -84,13 +84,13 @@ async def test_create_audio_caches_on_second_call(test_client, mongomock_db):
     with patch(
         "app.routers.audio.synthesize_story_audio", new=AsyncMock(return_value=b"first-call-audio")
     ):
-        first_response = test_client.post("/pois/wikipedia:1001/audio")
+        first_response = test_client.post("/v1/pois/wikipedia:1001/audio")
 
     with patch(
         "app.routers.audio.synthesize_story_audio",
         new=AsyncMock(return_value=b"should-never-be-returned"),
     ) as mock_second:
-        second_response = test_client.post("/pois/wikipedia:1001/audio")
+        second_response = test_client.post("/v1/pois/wikipedia:1001/audio")
 
     assert mock_second.call_count == 0
     assert first_response.content == second_response.content == b"first-call-audio"
@@ -104,11 +104,11 @@ async def test_different_languages_are_separate_files(test_client, mongomock_db)
     with patch(
         "app.routers.audio.synthesize_story_audio", new=AsyncMock(return_value=b"english-audio")
     ):
-        test_client.post("/pois/wikipedia:1001/audio?language=en")
+        test_client.post("/v1/pois/wikipedia:1001/audio?language=en")
 
     with patch(
         "app.routers.audio.synthesize_story_audio", new=AsyncMock(return_value=b"amharic-audio")
     ):
-        response = test_client.post("/pois/wikipedia:1001/audio?language=am")
+        response = test_client.post("/v1/pois/wikipedia:1001/audio?language=am")
 
     assert response.content == b"amharic-audio"

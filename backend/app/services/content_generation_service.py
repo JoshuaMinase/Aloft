@@ -40,12 +40,15 @@ async def generate_content_for_route(
     poi_source_ids: list[str],
     language: str = "en",
     max_concurrent: int | None = None,
+    skip_audio: bool = False,
 ) -> list[PoiContentResult]:
     """Generate stories and audio for every POI concurrently.
 
     max_concurrent limits simultaneous Groq + ElevenLabs calls so we don't
     blast the free-tier rate limits. Defaults to settings.content_generation_max_concurrent
     (3 for free-tier accounts; raise it in settings for paid plans).
+
+    skip_audio skips audio synthesis (useful when ElevenLabs quota is exhausted).
     """
     from app.core.config import get_settings
     concurrency = max_concurrent if max_concurrent is not None else get_settings().content_generation_max_concurrent
@@ -53,13 +56,13 @@ async def generate_content_for_route(
 
     async def _bounded(source_id: str) -> PoiContentResult:
         async with semaphore:
-            return await _generate_content_for_one_poi(client, db, source_id, language)
+            return await _generate_content_for_one_poi(client, db, source_id, language, skip_audio)
 
     return list(await asyncio.gather(*[_bounded(sid) for sid in poi_source_ids]))
 
 
 async def _generate_content_for_one_poi(
-    client: httpx.AsyncClient, db: AsyncIOMotorDatabase, source_id: str, language: str
+    client: httpx.AsyncClient, db: AsyncIOMotorDatabase, source_id: str, language: str, skip_audio: bool = False
 ) -> PoiContentResult:
     poi = await get_poi(db, source_id)
     if poi is None:
@@ -73,7 +76,7 @@ async def _generate_content_for_one_poi(
         )
 
     story_ready, audio_ready, error = await _ensure_story_and_audio(
-        client, db, source_id, poi.name, language
+        client, db, source_id, poi.name, language, skip_audio
     )
 
     images_found = 0
@@ -116,6 +119,7 @@ async def _ensure_story_and_audio(
     source_id: str,
     poi_name: str,
     language: str,
+    skip_audio: bool = False,
 ) -> tuple[bool, bool, str | None]:
     try:
         story = await get_story(db, source_id, language)
@@ -127,6 +131,10 @@ async def _ensure_story_and_audio(
     except (WikipediaClientError, GroqClientError) as exc:
         logger.warning("Story generation failed for %s: %s", source_id, exc)
         return False, False, f"Story generation failed: {exc}"
+
+    if skip_audio:
+        logger.info("Skipping audio synthesis for %s (skip_audio=true)", source_id)
+        return True, False, "Audio synthesis skipped (skip_audio=true)"
 
     voice_id = get_voice_id_for_language(language)
     try:

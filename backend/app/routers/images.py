@@ -23,11 +23,16 @@ from pydantic import BaseModel
 
 from app.clients.openverse import OpenverseClientError, OpenverseImage, search_images
 from app.clients.wikipedia import WikipediaClientError, get_images
-from app.core.dependencies import get_current_user, get_database, get_http_client
+from app.core.dependencies import (
+    get_current_user,
+    get_database,
+    get_http_client,
+    image_retrieval_rate_limit,
+)
 from app.models.user import User
 from app.services.poi_repository import get_poi, save_poi_images
 
-router = APIRouter(prefix="/pois", tags=["images"])
+router = APIRouter(prefix="/v1/pois", tags=["images"])
 logger = logging.getLogger("aloft.routers.images")
 
 
@@ -54,6 +59,7 @@ class PoiImagesResponse(BaseModel):
     "/{source_id}/images",
     response_model=PoiImagesResponse,
     summary="Fetch real photos for a POI",
+    dependencies=[Depends(image_retrieval_rate_limit())],
 )
 async def fetch_images(
     source_id: str,

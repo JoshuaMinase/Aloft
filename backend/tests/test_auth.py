@@ -196,7 +196,7 @@ async def test_get_user_by_id_returns_none_for_unknown(db):
 
 def test_signup_creates_account_and_returns_tokens(test_client):
     response = test_client.post(
-        "/auth/signup", json={"email": "new@example.com", "password": "secure123"}
+        "/v1/auth/signup", json={"email": "new@example.com", "password": "secure123"}
     )
     assert response.status_code == 201
     body = response.json()
@@ -207,7 +207,7 @@ def test_signup_creates_account_and_returns_tokens(test_client):
 
 def test_signup_access_token_is_valid_jwt(test_client):
     response = test_client.post(
-        "/auth/signup", json={"email": "tokencheck@example.com", "password": "secure123"}
+        "/v1/auth/signup", json={"email": "tokencheck@example.com", "password": "secure123"}
     )
     token = response.json()["access_token"]
     payload = decode_access_token(token)
@@ -216,16 +216,16 @@ def test_signup_access_token_is_valid_jwt(test_client):
 
 
 def test_signup_rejects_duplicate_email(test_client):
-    test_client.post("/auth/signup", json={"email": "dup@example.com", "password": "secure123"})
+    test_client.post("/v1/auth/signup", json={"email": "dup@example.com", "password": "secure123"})
     response = test_client.post(
-        "/auth/signup", json={"email": "dup@example.com", "password": "other123"}
+        "/v1/auth/signup", json={"email": "dup@example.com", "password": "other123"}
     )
     assert response.status_code == 409
 
 
 def test_signup_rejects_short_password(test_client):
     response = test_client.post(
-        "/auth/signup", json={"email": "short@example.com", "password": "abc"}
+        "/v1/auth/signup", json={"email": "short@example.com", "password": "abc"}
     )
     assert response.status_code == 422
     assert "8 characters" in response.json()["detail"]
@@ -233,7 +233,7 @@ def test_signup_rejects_short_password(test_client):
 
 def test_signup_rejects_invalid_email(test_client):
     response = test_client.post(
-        "/auth/signup", json={"email": "not-an-email", "password": "secure123"}
+        "/v1/auth/signup", json={"email": "not-an-email", "password": "secure123"}
     )
     assert response.status_code == 422
 
@@ -247,7 +247,7 @@ async def test_login_returns_tokens_for_valid_credentials(test_client, db):
     await create_user(db, "login@example.com", hash_password("mypassword"))
 
     response = test_client.post(
-        "/auth/login", json={"email": "login@example.com", "password": "mypassword"}
+        "/v1/auth/login", json={"email": "login@example.com", "password": "mypassword"}
     )
     assert response.status_code == 200
     body = response.json()
@@ -260,7 +260,7 @@ async def test_login_returns_401_for_wrong_password(test_client, db):
     await create_user(db, "wrong@example.com", hash_password("correct"))
 
     response = test_client.post(
-        "/auth/login", json={"email": "wrong@example.com", "password": "incorrect"}
+        "/v1/auth/login", json={"email": "wrong@example.com", "password": "incorrect"}
     )
     assert response.status_code == 401
     assert "Invalid" in response.json()["detail"]
@@ -268,7 +268,7 @@ async def test_login_returns_401_for_wrong_password(test_client, db):
 
 def test_login_returns_401_for_unknown_email(test_client):
     response = test_client.post(
-        "/auth/login", json={"email": "ghost@example.com", "password": "anypass123"}
+        "/v1/auth/login", json={"email": "ghost@example.com", "password": "anypass123"}
     )
     assert response.status_code == 401
 
@@ -276,10 +276,10 @@ def test_login_returns_401_for_unknown_email(test_client):
 def test_login_same_error_for_wrong_password_and_missing_account(test_client):
     """Both cases return 401 with the same message — no email enumeration."""
     r1 = test_client.post(
-        "/auth/login", json={"email": "ghost@example.com", "password": "anypass123"}
+        "/v1/auth/login", json={"email": "ghost@example.com", "password": "anypass123"}
     )
     r2 = test_client.post(
-        "/auth/login", json={"email": "also@example.com", "password": "wrongpass12"}
+        "/v1/auth/login", json={"email": "also@example.com", "password": "wrongpass12"}
     )
     assert r1.status_code == r2.status_code == 401
     assert r1.json()["detail"] == r2.json()["detail"]
@@ -291,7 +291,7 @@ def test_login_same_error_for_wrong_password_and_missing_account(test_client):
 
 def test_refresh_returns_new_tokens(test_client):
     signup = test_client.post(
-        "/auth/signup", json={"email": "refresh@example.com", "password": "secure123"}
+        "/v1/auth/signup", json={"email": "refresh@example.com", "password": "secure123"}
     )
     old_refresh = signup.json()["refresh_token"]
     old_access = signup.json()["access_token"]
@@ -300,7 +300,7 @@ def test_refresh_returns_new_tokens(test_client):
     # original (JWT timestamps have 1-second resolution).
     time.sleep(1)
 
-    response = test_client.post("/auth/refresh", json={"refresh_token": old_refresh})
+    response = test_client.post("/v1/auth/refresh", json={"refresh_token": old_refresh})
     assert response.status_code == 200
     body = response.json()
     assert "access_token" in body
@@ -311,22 +311,22 @@ def test_refresh_returns_new_tokens(test_client):
 
 def test_refresh_rejects_access_token(test_client):
     signup = test_client.post(
-        "/auth/signup", json={"email": "badrefresh@example.com", "password": "secure123"}
+        "/v1/auth/signup", json={"email": "badrefresh@example.com", "password": "secure123"}
     )
     access_token = signup.json()["access_token"]
 
-    response = test_client.post("/auth/refresh", json={"refresh_token": access_token})
+    response = test_client.post("/v1/auth/refresh", json={"refresh_token": access_token})
     assert response.status_code == 401
 
 
 def test_refresh_rejects_tampered_token(test_client):
     signup = test_client.post(
-        "/auth/signup", json={"email": "tamper@example.com", "password": "secure123"}
+        "/v1/auth/signup", json={"email": "tamper@example.com", "password": "secure123"}
     )
     refresh = signup.json()["refresh_token"]
     tampered = refresh[:-3] + "xxx"
 
-    response = test_client.post("/auth/refresh", json={"refresh_token": tampered})
+    response = test_client.post("/v1/auth/refresh", json={"refresh_token": tampered})
     assert response.status_code == 401
 
 
@@ -336,11 +336,11 @@ def test_refresh_rejects_tampered_token(test_client):
 
 def test_me_returns_user_profile_with_valid_token(test_client):
     signup = test_client.post(
-        "/auth/signup", json={"email": "me@example.com", "password": "secure123"}
+        "/v1/auth/signup", json={"email": "me@example.com", "password": "secure123"}
     )
     token = signup.json()["access_token"]
 
-    response = test_client.get("/auth/me", headers={"Authorization": f"Bearer {token}"})
+    response = test_client.get("/v1/auth/me", headers={"Authorization": f"Bearer {token}"})
     assert response.status_code == 200
     body = response.json()
     assert body["email"] == "me@example.com"
@@ -349,12 +349,12 @@ def test_me_returns_user_profile_with_valid_token(test_client):
 
 
 def test_me_returns_401_with_no_token(test_client):
-    response = test_client.get("/auth/me")
+    response = test_client.get("/v1/auth/me")
     assert response.status_code == 401
 
 
 def test_me_returns_401_with_invalid_token(test_client):
-    response = test_client.get("/auth/me", headers={"Authorization": "Bearer not.a.real.token"})
+    response = test_client.get("/v1/auth/me", headers={"Authorization": "Bearer not.a.real.token"})
     assert response.status_code == 401
 
 
@@ -365,7 +365,7 @@ def test_me_returns_401_with_invalid_token(test_client):
 def test_protected_endpoint_returns_401_with_no_auth_header(test_client):
     """POST /routes/pois is protected. No token → 401, not 422 or 500."""
     response = test_client.post(
-        "/routes/pois",
+        "/v1/routes/pois",
         json={"departure_iata": "ADD", "arrival_iata": "DXB"},
     )
     assert response.status_code == 401
@@ -373,7 +373,7 @@ def test_protected_endpoint_returns_401_with_no_auth_header(test_client):
 
 def test_protected_endpoint_returns_401_with_malformed_token(test_client):
     response = test_client.post(
-        "/routes/pois",
+        "/v1/routes/pois",
         json={"departure_iata": "ADD", "arrival_iata": "DXB"},
         headers={"Authorization": "Bearer garbage.token.here"},
     )
@@ -383,7 +383,7 @@ def test_protected_endpoint_returns_401_with_malformed_token(test_client):
 def test_protected_endpoint_accepts_valid_token(test_client):
     """A real access token for a real account gets past the auth check."""
     signup = test_client.post(
-        "/auth/signup", json={"email": "realuser@example.com", "password": "secure123"}
+        "/v1/auth/signup", json={"email": "realuser@example.com", "password": "secure123"}
     )
     token = signup.json()["access_token"]
 
@@ -394,7 +394,7 @@ def test_protected_endpoint_accepts_valid_token(test_client):
         side_effect=ValueError("no route"),
     ):
         response = test_client.post(
-            "/routes/pois",
+            "/v1/routes/pois",
             json={"departure": {"lat": 9.0, "lng": 38.0}, "arrival": {"lat": 25.0, "lng": 55.0}},
             headers={"Authorization": f"Bearer {token}"},
         )

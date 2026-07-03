@@ -5,7 +5,12 @@ from fastapi import APIRouter, Depends, HTTPException, Path
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pydantic import BaseModel
 
-from app.core.dependencies import get_current_user, get_database, get_http_client
+from app.core.dependencies import (
+    get_current_user,
+    get_database,
+    get_http_client,
+    story_generation_rate_limit,
+)
 from app.models.user import User
 from app.services.poi_repository import get_poi
 from app.services.story_repository import get_story, save_story
@@ -15,7 +20,7 @@ from app.services.story_service import (
     supported_languages,
 )
 
-router = APIRouter(prefix="/pois", tags=["stories"])
+router = APIRouter(prefix="/v1/pois", tags=["stories"])
 
 
 class StoryResponse(BaseModel):
@@ -28,6 +33,7 @@ class StoryResponse(BaseModel):
     "/{source_id}/story",
     response_model=StoryResponse,
     summary="Generate a narration story for a POI",
+    dependencies=[Depends(story_generation_rate_limit())],
 )
 async def create_story(
     source_id: str = Path(..., max_length=200, description="POI source ID, e.g. `wikipedia:12345`"),

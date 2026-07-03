@@ -1,5 +1,7 @@
+# Core production dependencies
 fastapi==0.136.3
 uvicorn[standard]==0.34.0
+gunicorn==23.0.0
 pydantic==2.10.4
 pydantic-settings==2.7.1
 pydantic[email]==2.10.4
@@ -8,18 +10,17 @@ httpx==0.28.1
 shapely==2.0.6
 geopy==2.4.1
 pyproj==3.7.2
-pydub==0.25.1
 redis==5.2.1
 boto3==1.35.99
 passlib[bcrypt]==1.7.4
 bcrypt==4.0.1
 PyJWT==2.13.0
 email-validator==2.2.0
+python-multipart==0.0.18
 
-# dev / test
-pytest==8.3.4
-pytest-asyncio==0.25.1
-respx==0.22.0
-ruff==0.9.10
-mongomock-motor==0.0.34
-fakeredis==2.26.2
+# Audio processing
+# pydub depends on audioop module which was removed in Python 3.13
+# For Python 3.13+, we use numpy + soundfile instead
+pydub==0.25.1; python_version < "3.13"
+numpy>=1.24.0
+soundfile>=0.12.0

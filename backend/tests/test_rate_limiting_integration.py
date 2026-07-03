@@ -121,10 +121,10 @@ async def test_content_generation_returns_429_once_limit_exceeded(test_client, d
         new=AsyncMock(return_value=fake_results),
     ):
         for _ in range(limit):
-            response = test_client.post(f"/routes/{bundle.route_key}/content")
+            response = test_client.post(f"/v1/routes/{bundle.route_key}/content")
             assert response.status_code == 200
 
-        response = test_client.post(f"/routes/{bundle.route_key}/content")
+        response = test_client.post(f"/v1/routes/{bundle.route_key}/content")
 
     assert response.status_code == 429
 
@@ -143,13 +143,13 @@ def test_flight_and_content_limits_are_independent(test_client, fake_redis):
         respx.get(f"{AVIATIONSTACK_BASE_URL}/airports").mock(return_value=httpx.Response(404))
 
         for _ in range(flight_limit):
-            test_client.post("/flights/ET409/pois")
-        exhausted = test_client.post("/flights/ET409/pois")
+            test_client.post("/v1/flights/ET409/pois")
+        exhausted = test_client.post("/v1/flights/ET409/pois")
 
     assert exhausted.status_code == 429
 
     # The content-generation budget should be completely untouched.
     # A 404 (route not discovered) proves the request reached the route
     # lookup at all -- i.e. it was NOT rejected by rate limiting.
-    content_response = test_client.post("/routes/no-such-route/content")
+    content_response = test_client.post("/v1/routes/no-such-route/content")
     assert content_response.status_code == 404

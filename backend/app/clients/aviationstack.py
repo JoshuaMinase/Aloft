@@ -23,6 +23,7 @@ class FlightInfo(BaseModel):
     departure_iata: str
     arrival_iata: str
     flight_status: str
+    callsign: str | None = None
 
 
 class AirportInfo(BaseModel):
@@ -53,11 +54,22 @@ async def get_flight(client: httpx.AsyncClient, flight_iata: str) -> FlightInfo:
             f"Flight '{flight_iata}' is missing a departure or arrival IATA code"
         )
 
+    callsign = None
+    flight_icao = flight.get("flight_icao") or flight.get("icao")
+    if flight_icao:
+        callsign = flight_icao.strip()
+    else:
+        airline_data = flight.get("airline") or {}
+        airline_icao = airline_data.get("icao")
+        if airline_icao:
+            callsign = f"{airline_icao.strip()}{flight_iata[:3]}".upper()
+
     return FlightInfo(
         flight_iata=flight_iata,
         departure_iata=departure_iata,
         arrival_iata=arrival_iata,
         flight_status=flight.get("flight_status") or "unknown",
+        callsign=callsign,
     )
 
 

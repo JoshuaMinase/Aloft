@@ -7,7 +7,13 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
-from app.core.dependencies import get_current_user, get_database, get_http_client
+from app.core.dependencies import (
+    get_current_user,
+    get_database,
+    get_http_client,
+    audio_synthesis_rate_limit,
+    mixed_audio_rate_limit,
+)
 from app.models.user import User
 from app.services.audio_mixing import AudioMixingError, mix_narration_with_music
 from app.services.audio_repository import get_audio, read_audio_bytes, save_audio
@@ -15,7 +21,7 @@ from app.services.audio_service import get_voice_id_for_language, synthesize_sto
 from app.services.music_catalog import ALL_TRACK_IDS, get_track
 from app.services.story_repository import get_story
 
-router = APIRouter(prefix="/pois", tags=["audio"])
+router = APIRouter(prefix="/v1/pois", tags=["audio"])
 
 
 @router.post(
@@ -28,6 +34,7 @@ router = APIRouter(prefix="/pois", tags=["audio"])
             "description": "No story found for this POI — generate it first via POST /pois/{source_id}/story"
         },
     },
+    dependencies=[Depends(audio_synthesis_rate_limit())],
 )
 async def create_audio(
     source_id: str,
@@ -86,6 +93,7 @@ async def create_audio(
         404: {"description": "No story or audio found for this POI, or music track not found"},
         422: {"description": "Audio mixing failed (corrupt audio or music file)"},
     },
+    dependencies=[Depends(mixed_audio_rate_limit())],
 )
 async def create_mixed_audio(
     source_id: str,

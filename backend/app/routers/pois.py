@@ -22,19 +22,35 @@ IATA lookup order for option 2:
 
 from __future__ import annotations
 
+import asyncio
 import httpx
-from fastapi import APIRouter, Depends, HTTPException
+from typing import Any
+from fastapi import APIRouter, Depends, HTTPException, Query
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pydantic import BaseModel, Field, model_validator
 
-from app.core.dependencies import get_current_user, get_database, get_http_client
+from app.core.dependencies import (
+    get_current_user,
+    get_database,
+    get_http_client,
+    poi_discovery_rate_limit,
+)
 from app.models.user import User
+from app.clients.openverse import OpenverseClientError, search_images as openverse_search_images
+from app.clients.wikipedia import WikipediaClientError, get_images
 from app.services.airport_repository import get_cached_airport, lookup_static_airport
-from app.services.poi_repository import save_pois
+from app.services.poi_repository import get_poi, save_poi_images, save_pois
 from app.services.poi_service import find_pois_along_corridor
 from app.services.route_bundle_repository import save_route_bundle
+from app.utils.pagination import (
+    PaginatedResponse,
+    PaginationParams,
+    build_sort_query,
+    calculate_pagination,
+    get_skip_limit,
+)
 
-router = APIRouter(prefix="/routes", tags=["discovery"])
+router = APIRouter(prefix="/v1/routes", tags=["discovery"])
 
 
 class Coordinates(BaseModel):
@@ -92,15 +108,19 @@ class DiscoverPoisResponse(BaseModel):
     arrival: tuple[float, float]
     pois_found: int
     pois_newly_inserted: int
+    images_fetched: int = 0
+    poi_source_ids: list[str] = []
 
 
 @router.post(
     "/pois",
     response_model=DiscoverPoisResponse,
     summary="Discover POIs along a flight route",
+    dependencies=[Depends(poi_discovery_rate_limit())],
 )
 async def discover_pois(
     body: DiscoverPoisRequest,
+    auto_images: bool = Query(False, description="Auto-fetch Wikipedia images for discovered POIs"),
     _: User = Depends(get_current_user),
     client: httpx.AsyncClient = Depends(get_http_client),
     db: AsyncIOMotorDatabase = Depends(get_database),
@@ -116,9 +136,15 @@ async def discover_pois(
     `POST /flights/{flight_iata}/pois` to populate the cache.
 
     The response includes a `route_key` you pass to subsequent calls:
-    - `POST /routes/{route_key}/content` — generate stories + audio
-    - `GET /routes/{route_key}/download` — download offline bundle
-    - `POST /sessions` — start a live session
+    - `POST /v1/pois/{source_id}/images` — fetch photos for a POI
+    - `POST /v1/pois/{source_id}/story` — generate narration text for a POI
+    - `POST /v1/pois/{source_id}/audio` — synthesize audio for a POI
+    - `POST /v1/pois/{source_id}/audio/mixed` — audio with music bed for a POI
+    - `POST /v1/sessions` — start a live session
+
+    **Auto-images mode:** pass `?auto_images=true` to
+    automatically fetch Wikipedia images for every discovered POI.
+    Without the flag, only POIs are discovered.
     """
     if body.departure_iata is not None:
         # IATA path -- resolve codes to coords
@@ -138,12 +164,38 @@ async def discover_pois(
     inserted, poi_source_ids = await save_pois(db, pois)
     bundle = await save_route_bundle(db, departure, arrival, poi_source_ids)
 
+    images_fetched = 0
+    if auto_images and poi_source_ids:
+        wikipedia_pois = [
+            (sid, name)
+            for sid in poi_source_ids
+            if sid.startswith("wikipedia:")
+            for name in [next((p.title for p in pois if f"wikipedia:{p.page_id}" == sid), "")]
+            if name
+        ]
+
+        if wikipedia_pois:
+            async def _fetch_one_image(sid: str, name: str) -> int:
+                try:
+                    images = await get_images(client, name, max_images=4)
+                    if images:
+                        await save_poi_images(db, sid, [img.url for img in images])
+                        return len(images)
+                except WikipediaClientError:
+                    pass
+                return 0
+
+            results = await asyncio.gather(*[_fetch_one_image(sid, name) for sid, name in wikipedia_pois], return_exceptions=True)
+            images_fetched = sum(r for r in results if isinstance(r, int))
+
     return DiscoverPoisResponse(
         route_key=bundle.route_key,
         departure=departure,
         arrival=arrival,
         pois_found=len(pois),
         pois_newly_inserted=inserted,
+        images_fetched=images_fetched,
+        poi_source_ids=poi_source_ids,
     )
 
 
@@ -170,4 +222,73 @@ async def _resolve_iata(db: AsyncIOMotorDatabase, iata_code: str) -> tuple[float
             f"Use lat/lng coordinates directly, or discover it first via "
             f"POST /flights/{{flight_iata}}/pois to populate the cache."
         ),
+    )
+
+
+class PoiListItem(BaseModel):
+    """Simplified POI model for list views."""
+
+    source_id: str
+    name: str
+    location: dict[str, Any]
+    source: str
+    updated_at: str
+
+
+@router.get(
+    "/list",
+    response_model=PaginatedResponse[PoiListItem],
+    summary="List POIs with pagination",
+    description=(
+        "Returns a paginated list of POIs. "
+        "Implements secure offset-based pagination with configurable page size. "
+        "Prevents over-fetching and improves performance for large datasets."
+    ),
+)
+async def list_pois(
+    params: PaginationParams = Depends(),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+    current_user: User = Depends(get_current_user),
+) -> PaginatedResponse[PoiListItem]:
+    """List POIs with pagination."""
+    
+    # Calculate skip and limit
+    skip, limit = get_skip_limit(params.page, params.page_size)
+    
+    # Build sort query
+    sort_query = build_sort_query(params.sort_by, params.sort_order)
+    
+    # Get total count
+    total = await db.pois.count_documents({})
+    
+    # Query with pagination
+    cursor = db.pois.find({}, skip=skip, limit=limit, sort=sort_query)
+    pois = await cursor.to_list(length=limit)
+    
+    # Convert to response model
+    items = []
+    for poi in pois:
+        updated_at = poi.get("updated_at")
+        # Handle both datetime objects and strings
+        if updated_at:
+            if isinstance(updated_at, str):
+                updated_at_str = updated_at
+            else:
+                updated_at_str = updated_at.isoformat()
+        else:
+            updated_at_str = ""
+        items.append(PoiListItem(
+            source_id=poi.get("source_id", ""),
+            name=poi.get("name", ""),
+            location=poi.get("location", {}),
+            source=poi.get("source", ""),
+            updated_at=updated_at_str
+        ))
+    
+    # Calculate pagination metadata
+    pagination_meta = calculate_pagination(total, params.page, params.page_size)
+    
+    return PaginatedResponse[PoiListItem](
+        items=items,
+        **pagination_meta
     )

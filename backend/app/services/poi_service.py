@@ -45,7 +45,7 @@ from app.services.corridor import build_corridor, point_in_corridor, sample_poin
 logger = logging.getLogger("aloft.services.poi")
 
 _SAMPLE_OVERLAP_FACTOR = 1.5
-_DEFAULT_MAX_CONCURRENT_REQUESTS = 8
+_DEFAULT_MAX_CONCURRENT_REQUESTS = 3
 
 # Coordinate rounding for cross-source deduplication.
 # ~100m resolution -- two results within 100m of each other are treated as

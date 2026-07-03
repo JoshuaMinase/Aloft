@@ -97,7 +97,7 @@ def test_discover_pois_returns_counts_and_persists(test_client, mongomock_db):
     with respx.mock:
         respx.get(WIKIPEDIA_API_URL).mock(return_value=httpx.Response(200, json=FIXED_RESPONSE))
         response = test_client.post(
-            "/routes/pois",
+            "/v1/routes/pois",
             json={"departure": ADD, "arrival": DXB, "width_km": 20},
         )
 
@@ -110,9 +110,9 @@ def test_discover_pois_returns_counts_and_persists(test_client, mongomock_db):
 def test_discover_pois_rerun_does_not_duplicate(test_client):
     with respx.mock:
         respx.get(WIKIPEDIA_API_URL).mock(return_value=httpx.Response(200, json=FIXED_RESPONSE))
-        test_client.post("/routes/pois", json={"departure": ADD, "arrival": DXB, "width_km": 20})
+        test_client.post("/v1/routes/pois", json={"departure": ADD, "arrival": DXB, "width_km": 20})
         second = test_client.post(
-            "/routes/pois", json={"departure": ADD, "arrival": DXB, "width_km": 20}
+            "/v1/routes/pois", json={"departure": ADD, "arrival": DXB, "width_km": 20}
         )
 
     assert second.json()["pois_found"] == 2
@@ -121,7 +121,7 @@ def test_discover_pois_rerun_does_not_duplicate(test_client):
 
 def test_discover_pois_rejects_degenerate_route_with_400(test_client):
     response = test_client.post(
-        "/routes/pois", json={"departure": ADD, "arrival": ADD, "width_km": 20}
+        "/v1/routes/pois", json={"departure": ADD, "arrival": ADD, "width_km": 20}
     )
     assert response.status_code == 400
     assert "same point" in response.json()["detail"]
@@ -130,14 +130,14 @@ def test_discover_pois_rejects_degenerate_route_with_400(test_client):
 def test_discover_pois_rejects_invalid_width_with_422(test_client):
     # width_km < 0.1 is rejected by Pydantic Field validation (ge=0.1)
     response = test_client.post(
-        "/routes/pois", json={"departure": ADD, "arrival": DXB, "width_km": -5}
+        "/v1/routes/pois", json={"departure": ADD, "arrival": DXB, "width_km": -5}
     )
     assert response.status_code == 422
 
 
 def test_discover_pois_rejects_malformed_request_body(test_client):
     # missing arrival entirely
-    response = test_client.post("/routes/pois", json={"departure": ADD})
+    response = test_client.post("/v1/routes/pois", json={"departure": ADD})
     assert response.status_code == 422
 
 
@@ -145,7 +145,7 @@ def test_discover_pois_returns_a_usable_route_key(test_client):
     with respx.mock:
         respx.get(WIKIPEDIA_API_URL).mock(return_value=httpx.Response(200, json=FIXED_RESPONSE))
         response = test_client.post(
-            "/routes/pois", json={"departure": ADD, "arrival": DXB, "width_km": 20}
+            "/v1/routes/pois", json={"departure": ADD, "arrival": DXB, "width_km": 20}
         )
 
     from app.services.route_bundle_repository import make_route_key
@@ -162,7 +162,7 @@ def test_discover_pois_by_iata_uses_static_dataset(test_client):
     with respx.mock:
         respx.get(WIKIPEDIA_API_URL).mock(return_value=httpx.Response(200, json=FIXED_RESPONSE))
         response = test_client.post(
-            "/routes/pois",
+            "/v1/routes/pois",
             json={"departure_iata": "ADD", "arrival_iata": "DXB", "width_km": 20},
         )
 
@@ -179,7 +179,7 @@ def test_discover_pois_by_iata_is_case_insensitive(test_client):
     with respx.mock:
         respx.get(WIKIPEDIA_API_URL).mock(return_value=httpx.Response(200, json=FIXED_RESPONSE))
         response = test_client.post(
-            "/routes/pois",
+            "/v1/routes/pois",
             json={"departure_iata": "add", "arrival_iata": "dxb"},
         )
 
@@ -209,7 +209,7 @@ def test_discover_pois_by_iata_uses_db_cache_when_not_in_static_dataset(test_cli
     with respx.mock:
         respx.get(WIKIPEDIA_API_URL).mock(return_value=httpx.Response(200, json=FIXED_RESPONSE))
         response = test_client.post(
-            "/routes/pois",
+            "/v1/routes/pois",
             json={"departure_iata": "ZZZ", "arrival_iata": "ZZY"},
         )
 
@@ -219,7 +219,7 @@ def test_discover_pois_by_iata_uses_db_cache_when_not_in_static_dataset(test_cli
 def test_discover_pois_by_unknown_iata_returns_422(test_client):
     """IATA code not in static dataset and not in DB cache -> 422 with helpful message."""
     response = test_client.post(
-        "/routes/pois",
+        "/v1/routes/pois",
         json={"departure_iata": "ZZZ", "arrival_iata": "ZZY"},
     )
 
@@ -231,7 +231,7 @@ def test_discover_pois_by_unknown_iata_returns_422(test_client):
 def test_discover_pois_rejects_mixing_coords_and_iata(test_client):
     """Providing both lat/lng and IATA codes at the same time is an error."""
     response = test_client.post(
-        "/routes/pois",
+        "/v1/routes/pois",
         json={
             "departure": ADD,
             "arrival": DXB,
@@ -245,7 +245,7 @@ def test_discover_pois_rejects_mixing_coords_and_iata(test_client):
 def test_discover_pois_rejects_partial_iata_input(test_client):
     """Providing only one IATA code (no arrival) is rejected."""
     response = test_client.post(
-        "/routes/pois",
+        "/v1/routes/pois",
         json={"departure_iata": "ADD"},
     )
     assert response.status_code == 422

@@ -4,10 +4,12 @@ Aloft turns any commercial flight into a live audio tour.
 
 ## Python Version Compatibility
 
-**Python 3.13 Support:** The application is compatible with Python 3.13+. However, audio mixing functionality requires pydub, which depends on the `audioop` module that was removed in Python 3.13. 
+**Python 3.13 Compatibility:** The application now supports Python 3.13+ with graceful degradation for audio mixing functionality.
 
 - **Python 3.12 or earlier:** Full functionality including audio mixing
-- **Python 3.13+:** All core functionality works; audio mixing will gracefully fall back with a clear error message
+- **Python 3.13+:** All core functionality works; audio mixing is gracefully disabled with a clear error message
+
+**Recommended:** Python 3.12 for full audio support. Use `.python-version` file for automatic version selection with pyenv or similar tools.
 
 ## Quick Start
 

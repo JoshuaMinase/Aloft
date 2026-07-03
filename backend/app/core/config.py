@@ -12,8 +12,13 @@ class Settings(BaseSettings):
     environment: str = "development"
     log_level: str = "INFO"
     app_contact_email: str = "CHANGE_ME@example.com"
-    mongodb_uri: str = "mongodb://localhost:27017"
+    mongodb_uri: str = "mongodb://localhost:27017/?directConnection=true"
     mongodb_db_name: str = "aloft"
+    
+    # CORS configuration
+    # In production, set this to specific origins like ["https://aloft.app", "https://www.aloft.app"]
+    # Use ["*"] for development to allow all origins
+    cors_allowed_origins: list[str] = ["*"]
     # None means "no Redis configured" -- rate limiting fails open (allows
     # the request) rather than blocking the whole app from working if
     # Redis isn't set up yet. See core/redis_client.py and
@@ -32,6 +37,19 @@ class Settings(BaseSettings):
     # Position updates are called every few seconds from the mobile app.
     # 600/min = 10 calls/sec — generous enough for any real polling interval.
     rate_limit_position_updates_per_minute: int = 600
+    
+    # Additional rate limits for expensive operations
+    rate_limit_poi_discovery_per_hour: int = 30
+    rate_limit_story_generation_per_hour: int = 50
+    rate_limit_audio_synthesis_per_hour: int = 30
+    rate_limit_downloads_per_hour: int = 10
+    rate_limit_session_creation_per_hour: int = 20
+    rate_limit_mixed_audio_per_hour: int = 15
+    rate_limit_image_retrieval_per_hour: int = 40
+    
+    # Account lockout settings
+    max_failed_login_attempts: int = 5
+    account_lockout_duration_minutes: int = 30
 
     # Maximum concurrent Groq + ElevenLabs calls during batch content
     # generation (POST /routes/{route_key}/content).
@@ -42,16 +60,24 @@ class Settings(BaseSettings):
     # Must be >= 1: asyncio.Semaphore(0) would permanently block all generation.
     content_generation_max_concurrent: int = Field(default=3, ge=1)
 
+    # Content generation throttling -- tunable without code changes.
+    # Groq free tier: ~30 req/min = 1 req/2s minimum.
+    # Wikipedia free tier: generous but parallel bursts trigger 429s.
+    content_inter_poi_delay_seconds: float = 3.0
+    content_inter_image_delay_seconds: float = 1.0
+    content_rate_limit_backoff_seconds: float = 60.0
+    content_max_poi_retries: int = 3
+
     # How long a flight session lives in Redis before auto-expiring.
     # 12 hours covers any realistic flight duration with margin.
     session_ttl_seconds: int = 43200
     corridor_width_km: float = 100.0
     groq_api_key: SecretStr | None = None
-    groq_model: str = "llama3-70b-8192"
+    groq_model: str = "llama-3.3-70b-versatile"
     elevenlabs_api_key: SecretStr | None = None
-    # Default voice: "Rachel" -- a clear, natural English narration voice.
+    # Default voice: "Bella" -- free tier voice for ElevenLabs.
     # Find other voice IDs at elevenlabs.io/voice-lab or GET /v1/voices.
-    elevenlabs_voice_id: str = "21m00Tcm4TlvDq8ikWAM"
+    elevenlabs_voice_id: str = "EXAVITQu4vr4xnSDxMaL"
     audio_storage_dir: str = "./audio_storage"
     aviationstack_api_key: str | None = None
 
@@ -110,6 +136,23 @@ class Settings(BaseSettings):
             )
         return self
 
+    @model_validator(mode="after")
+    def _check_production_cors(self) -> "Settings":
+        """Refuse to start in production with wildcard CORS origins.
+
+        Wildcard CORS allows any origin to access your API, which is a security risk.
+        In production, specify your actual frontend domain(s).
+        """
+        if (
+            self.environment.lower() == "production"
+            and self.cors_allowed_origins == ["*"]
+        ):
+            raise ValueError(
+                "CORS_ALLOWED_ORIGINS cannot be ['*'] in production. "
+                "Set it to your actual frontend domain(s), e.g., ['https://aloft.app', 'https://www.aloft.app']"
+            )
+        return self
+
     # ---------------------------------------------------------------------------
     # POI source feature flags
     # ---------------------------------------------------------------------------
@@ -146,11 +189,22 @@ class Settings(BaseSettings):
     # ---------------------------------------------------------------------------
     # OpenSky Network (optional — live aircraft position)
     # ---------------------------------------------------------------------------
-    # Anonymous access works but is limited to ~100 req/day per IP.
-    # Sign up free at https://opensky-network.org/login to get higher limits.
-    # Leave both fields unset for anonymous access.
-    opensky_username: str | None = None
-    opensky_password: SecretStr | None = None
+    # OpenSky now requires OAuth2 client credentials (basic auth was retired).
+    # Create an API client at https://opensky-network.org → Account → API Client.
+    # Set both fields to get ~4,000 req/day. Leave unset for anonymous (~100 req/day).
+    opensky_client_id: str | None = None
+    opensky_client_secret: SecretStr | None = None
+
+    # ---------------------------------------------------------------------------
+    # Email service for password reset
+    # ---------------------------------------------------------------------------
+    # Resend (recommended): https://resend.com/ - Free tier: 3,000 emails/month
+    # SendGrid (alternative): https://sendgrid.com/ - Free tier: 100 emails/day
+    # FROM_EMAIL must be verified in your email service dashboard
+    resend_api_key: SecretStr | None = None
+    sendgrid_api_key: SecretStr | None = None
+    from_email: str = "noreply@aloft.app"
+    frontend_base_url: str = "http://localhost:3000"  # Your frontend URL for reset links
 
 
 @lru_cache

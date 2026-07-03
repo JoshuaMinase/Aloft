@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import logging.config
@@ -8,17 +9,22 @@ from contextlib import asynccontextmanager
 
 import httpx
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import get_settings
 from app.core.db import close_mongo_connection, connect_to_mongo
 from app.core.redis import close_redis_connection, connect_to_redis
 from app.core.redis_client import (
     close_redis_connection as close_rate_limit_redis,
-)
-from app.core.redis_client import (
     connect_to_redis as connect_rate_limit_redis,
+    get_redis,
 )
-from app.routers import audio, auth, content, download, flights, images, pois, sessions, stories
+from app.middleware.security import (
+    RateLimitLoggingMiddleware,
+    RequestLoggingMiddleware,
+    SecurityHeadersMiddleware,
+)
+from app.routers import audio, auth, content, flights, gdpr, images, legal, pois, sessions, stories
 
 # ---------------------------------------------------------------------------
 # Structured JSON logging (production) / plain text (development)
@@ -95,18 +101,37 @@ logger = logging.getLogger("aloft.main")
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
-    await connect_to_mongo()
-    await connect_to_redis()
-    # Rate-limit Redis is optional -- connect_rate_limit_redis() is a no-op
-    # if REDIS_URL isn't configured, and rate limiting fails open without it.
-    await connect_rate_limit_redis()
+    try:
+        await connect_to_mongo()
+    except Exception as exc:
+        logger.error("FATAL: MongoDB connection failed: %s", exc)
+        raise
+    try:
+        await connect_to_redis()
+    except Exception as exc:
+        logger.error("FATAL: Redis connection failed: %s", exc)
+        raise
+    try:
+        await connect_rate_limit_redis()
+    except Exception as exc:
+        logger.error("FATAL: Rate-limit Redis connection failed: %s", exc)
+        raise
     app.state.http_client = httpx.AsyncClient()
 
-    # SEC-5: Warn loudly when the default JWT secret is in use in any environment.
-    # In production this is caught by config.py's model_validator and raises at
-    # Settings construction time. Here we catch the development case where the
-    # default is still in use -- tokens signed with a known public default are
-    # trivially forgeable by anyone who reads this codebase.
+    # Start background content worker if Redis is available
+    worker_task = None
+    redis_client = get_redis()
+    if redis_client is not None:
+        from app.services.content_worker import run_worker
+        from app.core.db import get_db
+        db = get_db()
+        worker_task = asyncio.create_task(
+            run_worker(redis_client, db, app.state.http_client)
+        )
+        logger.info("Content generation worker started")
+    else:
+        logger.warning("Redis not available -- content generation worker disabled")
+
     _JWT_DEFAULT = "change-me-in-production-use-secrets-token-hex-32"
     if settings.jwt_secret_key.get_secret_value() == _JWT_DEFAULT:
         logger.warning(
@@ -115,12 +140,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             "Set a strong random secret in your .env file: "
             "python -c \"import secrets; print(secrets.token_hex(32))\""
         )
-
     logger.info(
         "Aloft backend started",
         extra={"environment": settings.environment, "log_level": settings.log_level},
     )
     yield
+
+    if worker_task is not None:
+        worker_task.cancel()
+        try:
+            await worker_task
+        except asyncio.CancelledError:
+            pass
+
     await app.state.http_client.aclose()
     await close_rate_limit_redis()
     await close_redis_connection()
@@ -134,35 +166,79 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(
     title="Aloft",
-    version="0.1.0",
+    version="1.0.0",
     description=(
         "Aloft turns any commercial flight into a live audio tour.\n\n"
+        "**API Versioning:**\n"
+        "All endpoints are now prefixed with `/v1/` for version control. "
+        "This ensures backward compatibility when future API changes are introduced.\n\n"
         "**Authentication:**\n"
-        "All endpoints except `/health`, `POST /auth/signup`, `POST /auth/login`, "
-        "and `POST /auth/refresh` require a valid JWT access token.\n"
-        "Include it as `Authorization: Bearer <token>`.\n\n"
+        "All endpoints except `/health`, `POST /v1/auth/signup`, `GET /v1/auth/verify-email`, "
+        "`POST /v1/auth/resend-verification`, `POST /v1/auth/login`, `POST /v1/auth/refresh`, "
+        "`POST /v1/auth/forgot-password`, and `POST /v1/auth/reset-password` "
+        "require a valid JWT access token.\n"
+        "Include it as `Authorization: Bearer <token>`.\n"
+        "Email verification is required: `POST /v1/auth/signup` sends a verification email, "
+        "`GET /v1/auth/verify-email?token=...` verifies and returns tokens.\n"
+        "Use `POST /v1/auth/logout` to invalidate refresh tokens.\n"
+        "Use `POST /v1/auth/forgot-password` and `POST /v1/auth/reset-password` for password recovery.\n\n"
         "**Core flow:**\n"
-        "1. `POST /auth/signup` or `POST /auth/login` — get tokens\n"
-        "2. `POST /routes/pois` — discover points of interest along a route\n"
-        "3. `POST /routes/{route_key}/content` — generate stories + audio for every POI\n"
-        "4. `POST /sessions` — start a live session\n"
-        "5. `POST /sessions/{session_id}/position` — send GPS position, get narration triggers\n\n"
+        "1. `POST /v1/auth/signup` — create account (use dev-verify in development)\n"
+        "2. `POST /v1/routes/pois` — discover points of interest along a route\n"
+        "3. Batch content generation (recommended for routes with many POIs):\n"
+        "   - `POST /v1/routes/{route_key}/content` — queue background job for all POIs\n"
+        "   - `GET /v1/routes/{route_key}/content/status?job_id=...` — poll progress\n"
+        "4. Per-POI content (on demand, only when user selects a POI):\n"
+        "   - `POST /v1/pois/{source_id}/images` — fetch photos\n"
+        "   - `POST /v1/pois/{source_id}/story` — generate narration text\n"
+        "   - `POST /v1/pois/{source_id}/audio` — synthesize audio\n"
+        "   - `POST /v1/pois/{source_id}/audio/mixed` — audio with music bed\n"
+        "5. `POST /v1/sessions` — start a live flight session\n"
+        "6. `POST /v1/sessions/{session_id}/position` — send GPS, get narration triggers\n\n"
         "**Or, all-in-one by flight number:**\n"
-        "`POST /flights/{flight_iata}/pois` — looks up the route via AviationStack then runs step 2."
+        "`POST /v1/flights/{flight_iata}/pois` — looks up the route via AviationStack then runs step 2."
     ),
     contact={"name": "Aloft", "email": get_settings().app_contact_email},
     license_info={"name": "MIT"},
     lifespan=lifespan,
 )
+
+# ---------------------------------------------------------------------------
+# Security Middleware
+# ---------------------------------------------------------------------------
+# Add security headers and logging middleware
+app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(RequestLoggingMiddleware)
+app.add_middleware(RateLimitLoggingMiddleware)
+
+# ---------------------------------------------------------------------------
+# CORS Configuration
+# ---------------------------------------------------------------------------
+# Configure CORS for frontend integration. In production, replace "*" with
+# specific allowed origins for security.
+settings = get_settings()
+allowed_origins = settings.cors_allowed_origins if hasattr(settings, 'cors_allowed_origins') else ["*"]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=allowed_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ---------------------------------------------------------------------------
+# Router registration
+# ---------------------------------------------------------------------------
 app.include_router(auth.router)
 app.include_router(pois.router)
 app.include_router(stories.router)
 app.include_router(audio.router)
+app.include_router(content.router)
 app.include_router(flights.router)
 app.include_router(images.router)
-app.include_router(content.router)
-app.include_router(download.router)
 app.include_router(sessions.router)
+app.include_router(legal.router)
+app.include_router(gdpr.router)
 
 
 @app.get("/health", tags=["meta"], summary="Health check")

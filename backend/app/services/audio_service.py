@@ -9,21 +9,12 @@ from app.core.config import get_settings
 #
 # eleven_multilingual_v2 handles all 29 supported languages from a single
 # voice ID -- it detects language from the text automatically, no locale
-# parameter needed. The default (Rachel, 21m00Tcm4TlvDq8ikWAM) therefore
+# parameter needed. The default (Bella, EXAVITQu4vr4xnSDxMaL) therefore
 # works for every language the app supports.
 #
-# However, a native-accented voice can sound significantly more natural for
-# listeners who are themselves native speakers. These IDs are from the
-# ElevenLabs Voice Library (elevenlabs.io/voice-lab) -- public voices
-# verified to support eleven_multilingual_v2:
-#
-#   Arabic  -- "Anas" (Modern Standard Arabic, calm male narrator)
-#              voice_id: R6nda3uM038xEEKi7GFl
-#              https://elevenlabs.io/voice-lab (search "Anas Arabic narrator")
-#
-#   French  -- "Charlotte" (French female, clear narration)
-#              voice_id: XB0fDUnXU5powFXDhCwa
-#              ElevenLabs premade voice -- available on all tiers.
+# Language-specific voices require paid ElevenLabs plans.
+# For free tier accounts, use the default Bella voice which supports
+# multilingual text-to-speech.
 #
 # To verify or update these IDs:
 #   GET https://api.elevenlabs.io/v1/voices
@@ -32,19 +23,9 @@ from app.core.config import get_settings
 # To use a different voice for a language, set ELEVENLABS_VOICE_ID_{LANG}
 # in your .env (e.g. ELEVENLABS_VOICE_ID_AR=...). If unset, falls back to
 # the per-language default below, then the global default from settings.
-#
-# These IDs were spot-checked against the /v1/voices endpoint response on
-# 2026-07-01. Voice library is community-sourced, so IDs can be deleted
-# by their owners. Re-validate with:
-#   curl -s https://api.elevenlabs.io/v1/voices | python -m json.tool | grep voice_id
 _LANGUAGE_VOICE_DEFAULTS: dict[str, str] = {
-    # Modern Standard Arabic narrator -- warm, calm, documentary tone.
-    # Verified against eleven_multilingual_v2 on 2026-07-01.
-    "ar": "R6nda3uM038xEEKi7GFl",
-    # Charlotte -- ElevenLabs premade French female voice.
-    # Clear, neutral narration accent. Available on free tier.
-    # Verified against eleven_multilingual_v2 on 2026-07-01.
-    "fr": "XB0fDUnXU5powFXDhCwa",
+    # All languages use the default free tier voice (Bella)
+    # Language-specific voices require paid plans
 }
 
 
@@ -53,24 +34,23 @@ def get_voice_id_for_language(language: str) -> str:
 
     Priority order:
     1. ELEVENLABS_VOICE_ID env var override (global default from settings)
-       -- only used if it's been changed from the default Rachel ID, which
+       -- only used if it's been changed from the default Bella ID, which
        signals the operator intentionally picked a specific voice.
-    2. Per-language voice from _LANGUAGE_VOICE_DEFAULTS.
-    3. Rachel (21m00Tcm4TlvDq8ikWAM) -- the global fallback.
+    2. Per-language voice from _LANGUAGE_VOICE_DEFAULTS (empty for free tier).
+    3. Bella (EXAVITQu4vr4xnSDxMaL) -- the global fallback (free tier).
 
-    This means a fresh install with no .env changes gets language-appropriate
-    voices for Arabic and French, while an operator who sets ELEVENLABS_VOICE_ID
-    explicitly overrides everything.
+    This means a fresh install with no .env changes gets the free tier voice
+    which supports multilingual text-to-speech via eleven_multilingual_v2.
     """
     settings = get_settings()
-    _RACHEL_DEFAULT = "21m00Tcm4TlvDq8ikWAM"
+    _BELLA_DEFAULT = "EXAVITQu4vr4xnSDxMaL"
 
     # If operator has explicitly set a custom global voice, respect it.
-    if settings.elevenlabs_voice_id != _RACHEL_DEFAULT:
+    if settings.elevenlabs_voice_id != _BELLA_DEFAULT:
         return settings.elevenlabs_voice_id
 
-    # Use per-language default if available, else fall back to Rachel.
-    return _LANGUAGE_VOICE_DEFAULTS.get(language, _RACHEL_DEFAULT)
+    # Use per-language default if available, else fall back to Bella.
+    return _LANGUAGE_VOICE_DEFAULTS.get(language, _BELLA_DEFAULT)
 
 
 async def synthesize_story_audio(

@@ -7,6 +7,7 @@ MongoDB (mongomock) is still needed for route bundles, POIs, and stories.
 from __future__ import annotations
 
 from collections.abc import Iterator
+from unittest.mock import patch
 
 import fakeredis.aioredis as fakeredis
 import httpx
@@ -54,7 +55,7 @@ def test_client(db, redis, auth_override) -> Iterator[TestClient]:
 
 
 def test_start_session_404_for_unknown_route(test_client):
-    response = test_client.post("/sessions", json={"route_key": "no-such-route"})
+    response = test_client.post("/v1/sessions", json={"route_key": "no-such-route"})
 
     assert response.status_code == 404
 
@@ -64,7 +65,7 @@ async def test_start_session_succeeds_for_known_route(test_client, db):
     await save_pois(db, [NEARBY_POI])
     bundle = await save_route_bundle(db, ADD, DXB, ["wikipedia:1001"])
 
-    response = test_client.post("/sessions", json={"route_key": bundle.route_key})
+    response = test_client.post("/v1/sessions", json={"route_key": bundle.route_key})
 
     assert response.status_code == 200
     body = response.json()
@@ -74,7 +75,7 @@ async def test_start_session_succeeds_for_known_route(test_client, db):
 
 def test_position_update_404_for_unknown_session(test_client):
     response = test_client.post(
-        "/sessions/no-such-session/position", json={"lat": 9.0, "lng": 38.0}
+        "/v1/sessions/no-such-session/position", json={"lat": 9.0, "lng": 38.0}
     )
 
     assert response.status_code == 404
@@ -93,17 +94,18 @@ async def test_position_update_triggers_nearby_poi_with_story(test_client, db):
             model_version="test-model",
         ),
     )
-    session_id = test_client.post("/sessions", json={"route_key": bundle.route_key}).json()[
+    session_id = test_client.post("/v1/sessions", json={"route_key": bundle.route_key}).json()[
         "session_id"
     ]
 
-    response = test_client.post(f"/sessions/{session_id}/position", json={"lat": 9.0, "lng": 38.0})
+    response = test_client.post(f"/v1/sessions/{session_id}/position", json={"lat": 9.0, "lng": 38.0})
 
     assert response.status_code == 200
     body = response.json()
     assert body["triggered"] is True
     assert body["narration"]["source_id"] == "wikipedia:1001"
     assert body["narration"]["text_content"] == "A vivid story about the cathedral."
+    assert body["narration"]["narration_type"] == "poi"
     assert body["position_source"] == "client"
     assert body["lat_used"] == 9.0
     assert body["lng_used"] == 38.0
@@ -113,11 +115,15 @@ async def test_position_update_triggers_nearby_poi_with_story(test_client, db):
 async def test_position_update_not_triggered_when_nothing_nearby(test_client, db):
     await save_pois(db, [NEARBY_POI])
     bundle = await save_route_bundle(db, ADD, DXB, ["wikipedia:1001"])
-    session_id = test_client.post("/sessions", json={"route_key": bundle.route_key}).json()[
+    session_id = test_client.post("/v1/sessions", json={"route_key": bundle.route_key}).json()[
         "session_id"
     ]
 
-    response = test_client.post(f"/sessions/{session_id}/position", json={"lat": 0.0, "lng": 0.0})
+    # Mock region narration to prevent tier 3 fallback
+    with patch("app.routers.sessions.generate_region_narration") as mock_region:
+        mock_region.side_effect = Exception("Region narration disabled for test")
+
+        response = test_client.post(f"/v1/sessions/{session_id}/position", json={"lat": 0.0, "lng": 0.0})
 
     assert response.status_code == 200
     body = response.json()
@@ -139,12 +145,16 @@ async def test_same_poi_does_not_retrigger_on_second_nearby_ping(test_client, db
             model_version="test-model",
         ),
     )
-    session_id = test_client.post("/sessions", json={"route_key": bundle.route_key}).json()[
+    session_id = test_client.post("/v1/sessions", json={"route_key": bundle.route_key}).json()[
         "session_id"
     ]
 
-    first = test_client.post(f"/sessions/{session_id}/position", json={"lat": 9.0, "lng": 38.0})
-    second = test_client.post(f"/sessions/{session_id}/position", json={"lat": 9.0, "lng": 38.0})
+    # Mock region narration to prevent tier 3 fallback
+    with patch("app.routers.sessions.generate_region_narration") as mock_region:
+        mock_region.side_effect = Exception("Region narration disabled for test")
+
+        first = test_client.post(f"/v1/sessions/{session_id}/position", json={"lat": 9.0, "lng": 38.0})
+        second = test_client.post(f"/v1/sessions/{session_id}/position", json={"lat": 9.0, "lng": 38.0})
 
     assert first.json()["triggered"] is True
     assert second.json()["triggered"] is False
@@ -154,13 +164,18 @@ async def test_same_poi_does_not_retrigger_on_second_nearby_ping(test_client, db
 async def test_triggered_poi_with_no_story_still_marks_narrated(test_client, db):
     await save_pois(db, [NEARBY_POI])
     bundle = await save_route_bundle(db, ADD, DXB, ["wikipedia:1001"])
-    session_id = test_client.post("/sessions", json={"route_key": bundle.route_key}).json()[
+    session_id = test_client.post("/v1/sessions", json={"route_key": bundle.route_key}).json()[
         "session_id"
     ]
 
-    first = test_client.post(f"/sessions/{session_id}/position", json={"lat": 9.0, "lng": 38.0})
-    second = test_client.post(f"/sessions/{session_id}/position", json={"lat": 9.0, "lng": 38.0})
+    # Mock region narration to prevent tier 3 fallback
+    with patch("app.routers.sessions.generate_region_narration") as mock_region:
+        mock_region.side_effect = Exception("Region narration disabled for test")
+
+        first = test_client.post(f"/v1/sessions/{session_id}/position", json={"lat": 9.0, "lng": 38.0})
+        second = test_client.post(f"/v1/sessions/{session_id}/position", json={"lat": 9.0, "lng": 38.0})
 
     assert first.json()["triggered"] is True
     assert first.json()["narration"]["text_content"] is None
+    assert first.json()["narration"]["narration_type"] == "poi"
     assert second.json()["triggered"] is False

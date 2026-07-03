@@ -16,6 +16,9 @@ _MAX_ATTEMPTS = 3
 _BACKOFF_BASE_SECONDS = 1.0
 
 
+_GROQ_SEMAPHORE = asyncio.Semaphore(3)
+
+
 class GroqClientError(Exception):
     pass
 
@@ -47,41 +50,42 @@ async def chat_completion(
     last_error: Exception | None = None
     retry_after_override: float | None = None
 
-    for attempt in range(1, _MAX_ATTEMPTS + 1):
-        try:
-            response = await client.post(
-                GROQ_API_URL, json=payload, headers=headers, timeout=timeout
-            )
-            response.raise_for_status()
-        except httpx.TransportError as exc:
-            last_error = exc
-            logger.warning("Groq network error, attempt %d/%d: %s", attempt, _MAX_ATTEMPTS, exc)
-        except httpx.HTTPStatusError as exc:
-            if exc.response.status_code not in _RETRYABLE_STATUS_CODES:
-                raise GroqClientError(
-                    f"Groq returned non-retryable status {exc.response.status_code}: "
-                    f"{exc.response.text[:200]}"
-                ) from exc
-            last_error = exc
-            retry_after_override = _retry_after_seconds(exc.response)
-            logger.warning(
-                "Groq got retryable status %d, attempt %d/%d (retry-after=%s)",
-                exc.response.status_code,
-                attempt,
-                _MAX_ATTEMPTS,
-                retry_after_override,
-            )
-        else:
-            return _extract_text(response)
+    async with _GROQ_SEMAPHORE:
+        for attempt in range(1, _MAX_ATTEMPTS + 1):
+            try:
+                response = await client.post(
+                    GROQ_API_URL, json=payload, headers=headers, timeout=timeout
+                )
+                response.raise_for_status()
+            except httpx.TransportError as exc:
+                last_error = exc
+                logger.warning("Groq network error, attempt %d/%d: %s", attempt, _MAX_ATTEMPTS, exc)
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code not in _RETRYABLE_STATUS_CODES:
+                    raise GroqClientError(
+                        f"Groq returned non-retryable status {exc.response.status_code}: "
+                        f"{exc.response.text[:200]}"
+                    ) from exc
+                last_error = exc
+                retry_after_override = _retry_after_seconds(exc.response)
+                logger.warning(
+                    "Groq got retryable status %d, attempt %d/%d (retry-after=%s)",
+                    exc.response.status_code,
+                    attempt,
+                    _MAX_ATTEMPTS,
+                    retry_after_override,
+                )
+            else:
+                return _extract_text(response)
 
-        if attempt < _MAX_ATTEMPTS:
-            wait = (
-                retry_after_override
-                if retry_after_override is not None
-                else _BACKOFF_BASE_SECONDS * (2 ** (attempt - 1))
-            )
-            await asyncio.sleep(wait)
-            retry_after_override = None
+            if attempt < _MAX_ATTEMPTS:
+                wait = (
+                    retry_after_override
+                    if retry_after_override is not None
+                    else _BACKOFF_BASE_SECONDS * (2 ** (attempt - 1))
+                )
+                await asyncio.sleep(wait)
+                retry_after_override = None
 
     raise GroqClientError(f"chat_completion failed after {_MAX_ATTEMPTS} attempts") from last_error
 

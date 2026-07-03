@@ -78,3 +78,56 @@ def _build_prompt(poi_name: str, summary: str, language: str) -> list[dict[str, 
         {"role": "system", "content": f"{_STYLE_INSTRUCTION} Write entirely in {language_name}."},
         {"role": "user", "content": f"Place: {poi_name}\n\nFacts to draw from:\n{summary}"},
     ]
+
+
+async def generate_upcoming_story(
+    client: httpx.AsyncClient,
+    poi_source_id: str,
+    poi_name: str,
+    distance_km: float,
+    language: str = "en",
+) -> Story:
+    """Generate a 'coming up ahead' teaser story for a POI.
+
+    Different tone from generate_story() -- shorter, forward-looking,
+    builds anticipation rather than describing the place fully.
+    A passenger will hear this while still 20-30 minutes away.
+    """
+    summary = await get_summary(client, poi_name)
+    if len(summary.strip()) < _MIN_SUMMARY_LENGTH:
+        raise InsufficientFactsError(
+            f"No usable summary for '{poi_name}' -- can't generate upcoming teaser."
+        )
+
+    minutes_away = round((distance_km / 850) * 60)  # 850 km/h average cruising speed
+
+    messages = _build_upcoming_prompt(poi_name, summary, language, minutes_away)
+    text = await chat_completion(client, messages, temperature=0.8, max_tokens=150)
+
+    return Story(
+        poi_source_id=f"upcoming:{poi_source_id}",
+        language=language,
+        text_content=text.strip(),
+        style_prompt="upcoming teaser",
+        model_version=get_settings().groq_model,
+    )
+
+
+def _build_upcoming_prompt(
+    poi_name: str,
+    summary: str,
+    language: str,
+    minutes_away: int,
+) -> list[dict[str, str]]:
+    language_name = _LANGUAGE_NAMES.get(language, language)
+    system_content = (
+        f"You are narrating for passengers on a flight. The place you're "
+        f"describing is approximately {minutes_away} minutes ahead. Write "
+        f"ONE sentence that builds anticipation -- hint at what makes this "
+        f"place remarkable without giving everything away. Dramatic, warm, "
+        f"forward-looking. No more than 30 words. Write entirely in {language_name}."
+    )
+    return [
+        {"role": "system", "content": system_content},
+        {"role": "user", "content": f"Place coming up: {poi_name}\n\nFacts: {summary}"},
+    ]

@@ -36,7 +36,18 @@ MAX_LIMIT = 500
 
 _RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 _MAX_ATTEMPTS = 3
-_BACKOFF_BASE_SECONDS = 0.5
+_BACKOFF_BASE_SECONDS = 2.0
+
+# Simple in-memory cache for geosearch results (rounded coordinates)
+# Cache size limited to prevent memory issues
+_GEOSEARCH_CACHE_SIZE = 100
+_geosearch_cache: dict[tuple, list[RawPoi]] = {}
+
+_wiki_semaphore = asyncio.Semaphore(5)
+
+def _cache_key(lat: float, lng: float, radius_m: int, limit: int) -> tuple:
+    """Create a cache key by rounding coordinates to ~1km precision."""
+    return (round(lat, 3), round(lng, 3), radius_m, limit)
 
 
 class RawPoi(BaseModel):
@@ -114,6 +125,12 @@ async def geosearch(
     if not (0 < limit <= MAX_LIMIT):
         raise ValueError(f"limit must be between 1 and {MAX_LIMIT}, got {limit}")
 
+    # Check cache first
+    key = _cache_key(lat, lng, radius_m, limit)
+    if key in _geosearch_cache:
+        logger.debug("Cache hit for geosearch near (%s, %s)", lat, lng)
+        return _geosearch_cache[key]
+
     params = {
         "action": "query",
         "list": "geosearch",
@@ -125,7 +142,15 @@ async def geosearch(
     response = await _request_with_retries(
         client, params, log_context=f"geosearch near ({lat}, {lng})"
     )
-    return _parse_geosearch_response(response, lat, lng)
+    results = _parse_geosearch_response(response, lat, lng)
+    
+    # Cache the results
+    if len(_geosearch_cache) >= _GEOSEARCH_CACHE_SIZE:
+        # Simple eviction: remove oldest entry (first key)
+        _geosearch_cache.pop(next(iter(_geosearch_cache)))
+    _geosearch_cache[key] = results
+    
+    return results
 
 
 async def get_summary(client: httpx.AsyncClient, title: str) -> str:
@@ -137,7 +162,8 @@ async def get_summary(client: httpx.AsyncClient, title: str) -> str:
         "titles": title,
         "format": "json",
     }
-    response = await _request_with_retries(client, params, log_context=f"get_summary for '{title}'")
+    async with _wiki_semaphore:
+        response = await _request_with_retries(client, params, log_context=f"get_summary for '{title}'")
     return _parse_summary_response(response, title)
 
 
@@ -154,8 +180,9 @@ async def get_images(client: httpx.AsyncClient, title: str, max_images: int = 4)
     Raises:
         WikipediaClientError: if a request fails outright.
     """
-    lead_image = await _get_lead_image(client, title)
-    gallery_images = await _get_gallery_images(client, title)
+    async with _wiki_semaphore:
+        lead_image = await _get_lead_image(client, title)
+        gallery_images = await _get_gallery_images(client, title)
 
     results: list[RawImage] = []
     seen_urls: set[str] = set()
@@ -251,7 +278,7 @@ async def _request_with_retries(
     client: httpx.AsyncClient, params: dict, *, log_context: str
 ) -> httpx.Response:
     headers = {"User-Agent": _user_agent()}
-    timeout = httpx.Timeout(connect=5.0, read=10.0, write=5.0, pool=5.0)
+    timeout = httpx.Timeout(connect=3.0, read=8.0, write=3.0, pool=3.0)
 
     last_error: Exception | None = None
     for attempt in range(1, _MAX_ATTEMPTS + 1):

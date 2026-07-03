@@ -19,6 +19,7 @@ Position sources (in priority order)
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime, timedelta
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
@@ -34,22 +35,31 @@ from app.core.dependencies import (
     get_http_client,
     get_redis,
     position_update_rate_limit,
+    session_creation_rate_limit,
 )
 from app.models.user import User
 from app.services.flight_session_repository import (
     create_session,
     get_session,
     record_position_and_narration,
+    record_region_narration,
+    record_upcoming_narration,
 )
 from app.services.poi_repository import get_pois_by_source_ids
 from app.services.position_tracking_service import (
     DEFAULT_TRIGGER_RADIUS_KM,
     find_next_poi_to_narrate,
+    find_next_upcoming_poi,
+)
+from app.services.region_narration_service import (
+    REGION_NARRATION_COOLDOWN_MINUTES,
+    generate_region_narration,
 )
 from app.services.route_bundle_repository import get_route_bundle
 from app.services.story_repository import get_story
+from app.services.story_service import generate_upcoming_story
 
-router = APIRouter(prefix="/sessions", tags=["live session"])
+router = APIRouter(prefix="/v1/sessions", tags=["live session"])
 logger = logging.getLogger("aloft.routers.sessions")
 
 
@@ -106,9 +116,10 @@ class PositionUpdateRequest(BaseModel):
 
 
 class NarrationTrigger(BaseModel):
-    source_id: str
+    source_id: str | None = None  # None for region narrations
     name: str
     text_content: str | None = None
+    narration_type: str  # "poi" | "upcoming" | "region"
 
 
 class PositionUpdateResponse(BaseModel):
@@ -124,6 +135,7 @@ class PositionUpdateResponse(BaseModel):
     "",
     response_model=StartSessionResponse,
     summary="Start a live flight session",
+    dependencies=[Depends(session_creation_rate_limit())],
 )
 async def start_session(
     body: StartSessionRequest,
@@ -177,12 +189,17 @@ async def update_position(
        OpenSky is not requested or when OpenSky lookup fails (not in coverage,
        rate limit hit). `position_source` in the response reflects which was used.
 
-    **Narration logic:**
-    - Returns `triggered: false` on most calls — nothing new in range.
-    - Returns `triggered: true` + narration details when the aircraft enters
-      `trigger_radius_km` of an un-narrated POI for the first time.
-    - Each POI triggers **at most once** per session.
-    - A triggered POI with no pre-generated story returns `text_content: null`.
+    **Three-tier narration logic:**
+    1. **POI directly below** — when the aircraft enters `trigger_radius_km` of an
+       un-narrated POI, returns `triggered: true` with `narration_type: "poi"`.
+    2. **POI coming up ahead** — if no POI is nearby but one is within 300km ahead,
+       returns a teaser with `narration_type: "upcoming"`.
+    3. **Region/ocean context** — if no POIs are nearby or upcoming, and enough
+       time has passed since the last region narration (45-minute cooldown), returns
+       contextual narration with `narration_type: "region"`.
+
+    Each POI triggers **at most once** per session. Region narrations are
+    rate-limited to avoid repetition during long ocean crossings.
     """
     session = await get_session(redis, session_id)
     if session is None:
@@ -234,34 +251,92 @@ async def update_position(
             )
 
     # ---------------------------------------------------------------------------
-    # POI proximity check and narration trigger
+    # Three-tier narration logic
     # ---------------------------------------------------------------------------
     route_pois = await get_pois_by_source_ids(db, bundle.poi_source_ids)
     already_narrated = set(session.narrated_poi_source_ids)
+    already_upcoming = set(session.upcoming_poi_triggered_source_ids)
 
+    # --- Tier 1: POI directly below (existing behavior) ---
     next_poi = find_next_poi_to_narrate(
         lat, lng, route_pois, already_narrated, body.trigger_radius_km
     )
-
-    if next_poi is None:
-        await record_position_and_narration(redis, session_id, lat, lng, None)
+    if next_poi is not None:
+        story = await get_story(db, next_poi.source_id, body.language)
+        await record_position_and_narration(redis, session_id, lat, lng, next_poi.source_id)
         return PositionUpdateResponse(
-            triggered=False,
+            triggered=True,
+            narration=NarrationTrigger(
+                source_id=next_poi.source_id,
+                name=next_poi.name,
+                text_content=story.text_content if story else None,
+                narration_type="poi",
+            ),
             lat_used=lat,
             lng_used=lng,
             position_source=position_source,
         )
 
-    story = await get_story(db, next_poi.source_id, body.language)
-    await record_position_and_narration(redis, session_id, lat, lng, next_poi.source_id)
+    # --- Tier 2: POI coming up ahead ---
+    upcoming_result = find_next_upcoming_poi(
+        lat, lng, route_pois, already_narrated | already_upcoming
+    )
+    if upcoming_result is not None:
+        upcoming_poi, dist = upcoming_result
+        try:
+            upcoming_story = await generate_upcoming_story(
+                client, upcoming_poi.source_id, upcoming_poi.name, dist, body.language
+            )
+            await record_upcoming_narration(redis, session_id, upcoming_poi.source_id)
+            await record_position_and_narration(redis, session_id, lat, lng, None)
+            return PositionUpdateResponse(
+                triggered=True,
+                narration=NarrationTrigger(
+                    source_id=upcoming_poi.source_id,
+                    name=upcoming_poi.name,
+                    text_content=upcoming_story.text_content,
+                    narration_type="upcoming",
+                ),
+                lat_used=lat,
+                lng_used=lng,
+                position_source=position_source,
+            )
+        except Exception:
+            logger.warning("Upcoming story generation failed, falling through to region")
 
+    # --- Tier 3: Region/ocean context (with cooldown) ---
+    cooldown_minutes = REGION_NARRATION_COOLDOWN_MINUTES
+    last_region = session.last_region_narration_at
+    cooldown_passed = (
+        last_region is None or
+        datetime.now(UTC) - last_region > timedelta(minutes=cooldown_minutes)
+    )
+
+    if cooldown_passed:
+        try:
+            region_text = await generate_region_narration(
+                client, lat, lng, language=body.language
+            )
+            await record_region_narration(redis, session_id, lat, lng)
+            return PositionUpdateResponse(
+                triggered=True,
+                narration=NarrationTrigger(
+                    source_id=None,
+                    name="Current region",
+                    text_content=region_text,
+                    narration_type="region",
+                ),
+                lat_used=lat,
+                lng_used=lng,
+                position_source=position_source,
+            )
+        except Exception:
+            logger.warning("Region narration failed at (%s, %s)", lat, lng)
+
+    # Nothing to narrate right now
+    await record_position_and_narration(redis, session_id, lat, lng, None)
     return PositionUpdateResponse(
-        triggered=True,
-        narration=NarrationTrigger(
-            source_id=next_poi.source_id,
-            name=next_poi.name,
-            text_content=story.text_content if story is not None else None,
-        ),
+        triggered=False,
         lat_used=lat,
         lng_used=lng,
         position_source=position_source,

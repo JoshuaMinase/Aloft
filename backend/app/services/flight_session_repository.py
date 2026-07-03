@@ -90,3 +90,47 @@ async def record_position_and_narration(
 
     ttl = get_settings().session_ttl_seconds
     await redis.set(key, _serialize(session), ex=ttl)
+
+
+async def record_region_narration(
+    redis: Redis,
+    session_id: str,
+    lat: float,
+    lng: float,
+) -> None:
+    """Record that a region narration fired -- updates the cooldown timestamp."""
+    key = _key(session_id)
+    raw = await redis.get(key)
+    if raw is None:
+        return  # session expired or never existed -- nothing to update
+
+    session = _deserialize(raw)
+    session.last_position = (lat, lng)
+    session.last_region_narration_at = datetime.now(UTC)
+    session.last_updated_at = datetime.now(UTC)
+
+    ttl = get_settings().session_ttl_seconds
+    await redis.set(key, _serialize(session), ex=ttl)
+
+
+async def record_upcoming_narration(
+    redis: Redis,
+    session_id: str,
+    poi_source_id: str,
+) -> None:
+    """Record that an upcoming/teaser narration fired for a POI.
+    Idempotent: the same POI is never teasered twice per session.
+    """
+    key = _key(session_id)
+    raw = await redis.get(key)
+    if raw is None:
+        return  # session expired or never existed -- nothing to update
+
+    session = _deserialize(raw)
+    session.last_updated_at = datetime.now(UTC)
+
+    if poi_source_id not in session.upcoming_poi_triggered_source_ids:
+        session.upcoming_poi_triggered_source_ids.append(poi_source_id)
+
+    ttl = get_settings().session_ttl_seconds
+    await redis.set(key, _serialize(session), ex=ttl)
