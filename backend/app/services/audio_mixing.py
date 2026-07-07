@@ -1,28 +1,10 @@
 from __future__ import annotations
 
-import io
 import tempfile
 from pathlib import Path
 
-# Handle Python 3.13 compatibility - audioop was removed
-try:
-    from pydub import AudioSegment
-
-    _PYDUB_AVAILABLE = True
-except (ImportError, ModuleNotFoundError):
-    _PYDUB_AVAILABLE = False
-    AudioSegment = None
-
-# Python 3.13+ compatible audio processing using numpy + soundfile
-try:
-    import numpy as np
-    import soundfile as sf
-
-    _NUMPY_AVAILABLE = True
-except (ImportError, ModuleNotFoundError):
-    _NUMPY_AVAILABLE = False
-    np = None
-    sf = None
+import numpy as np
+import soundfile as sf
 
 _MUSIC_VOLUME_REDUCTION_DB = 18.0
 _FADE_MS = 1500
@@ -39,25 +21,13 @@ def mix_narration_with_music(narration_bytes: bytes, music_file_path: str) -> by
     Music is lowered 18dB, faded in/out, and looped or trimmed to match
     narration duration. Output format matches narration input format.
 
-    Raises AudioMixingError if either input can't be decoded or if no
-    audio processing library is available.
+    Raises AudioMixingError if either input can't be decoded.
     """
-    # Try numpy + soundfile first (Python 3.13+ compatible)
-    if _NUMPY_AVAILABLE:
-        return _mix_with_numpy(narration_bytes, music_file_path)
-
-    # Fall back to pydub (Python 3.12 and earlier)
-    if _PYDUB_AVAILABLE:
-        return _mix_with_pydub(narration_bytes, music_file_path)
-
-    raise AudioMixingError(
-        "Audio mixing requires either numpy+soundfile (Python 3.13+) or pydub (Python 3.12-). "
-        "Install with: pip install numpy soundfile"
-    )
+    return _mix_with_numpy(narration_bytes, music_file_path)
 
 
 def _mix_with_numpy(narration_bytes: bytes, music_file_path: str) -> bytes:
-    """Mix audio using numpy + soundfile (Python 3.13+ compatible)."""
+    """Mix audio using numpy + soundfile."""
     try:
         # Detect input format
         fmt = _detect_format(narration_bytes)
@@ -80,8 +50,6 @@ def _mix_with_numpy(narration_bytes: bytes, music_file_path: str) -> bytes:
 
         # Resample music to match narration if needed (simple linear interpolation)
         if music_sr != sr:
-            import numpy as np
-
             num_samples = int(len(music_audio) * sr / music_sr)
             indices = np.linspace(0, len(music_audio) - 1, num_samples)
             music_audio = music_audio[np.clip(indices.astype(int), 0, len(music_audio) - 1)]
@@ -113,27 +81,6 @@ def _mix_with_numpy(narration_bytes: bytes, music_file_path: str) -> bytes:
 
     except Exception as exc:
         raise AudioMixingError(f"Audio mixing failed: {exc}") from exc
-
-
-def _mix_with_pydub(narration_bytes: bytes, music_file_path: str) -> bytes:
-    """Mix audio using pydub (Python 3.12 and earlier)."""
-    fmt = _detect_format(narration_bytes)
-    try:
-        narration = AudioSegment.from_file(io.BytesIO(narration_bytes), format=fmt)
-    except Exception as exc:
-        raise AudioMixingError(f"Could not decode narration audio: {exc}") from exc
-
-    try:
-        music = AudioSegment.from_file(music_file_path)
-    except Exception as exc:
-        raise AudioMixingError(f"Could not read music file '{music_file_path}': {exc}") from exc
-
-    fitted = _fit_to_duration_pydub(music - _MUSIC_VOLUME_REDUCTION_DB, len(narration))
-    mixed = fitted.fade_in(_FADE_MS).fade_out(_FADE_MS).overlay(narration)
-
-    buf = io.BytesIO()
-    mixed.export(buf, format=fmt)
-    return buf.getvalue()
 
 
 def _fit_music_to_narration(music: np.ndarray, narration_length: int) -> np.ndarray:
@@ -172,17 +119,6 @@ def _apply_fade(audio: np.ndarray, fade_ms: int, sample_rate: int) -> np.ndarray
     audio[-fade_samples:] *= fade_out_curve[:, np.newaxis]
 
     return audio
-
-
-def _fit_to_duration_pydub(music: AudioSegment, target_ms: int) -> AudioSegment:
-    if len(music) == 0:
-        return AudioSegment.silent(duration=target_ms)
-    if len(music) >= target_ms:
-        return music[:target_ms]
-    looped = music
-    while len(looped) < target_ms:
-        looped += music
-    return looped[:target_ms]
 
 
 def _detect_format(data: bytes) -> str:

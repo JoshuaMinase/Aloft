@@ -20,11 +20,7 @@ norecursedirs = ["scripts"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
-markers = [
-    "skip_audio: Skip audio mixing tests (pydub incompatible with Python 3.13)",
-]
-# pydub is incompatible with Python 3.13 (audioop module removed)
-# Skip audio mixing tests until pydub is updated or alternative is found
+markers = []
 filterwarnings = [
     "ignore::DeprecationWarning",
     "ignore::UserWarning",

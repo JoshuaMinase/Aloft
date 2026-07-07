@@ -6,7 +6,7 @@ Usage:
 
 Checks:
   1. File exists and is non-empty.
-  2. pydub can decode the file without error.
+  2. soundfile can decode the file without error.
   3. Duration is at least 10s (catches truncated downloads).
   4. Audio has at least one channel (catches corrupt/silent-only files).
 
@@ -30,7 +30,7 @@ except ImportError:
 
 from app.services.music_catalog import TRACKS, MusicTrack
 
-_MIN_DURATION_MS = 10_000  # 10 seconds minimum
+_MIN_DURATION_S = 10  # 10 seconds minimum
 
 
 def validate_track(track: MusicTrack, music_dir: Path) -> bool:
@@ -49,42 +49,46 @@ def validate_track(track: MusicTrack, music_dir: Path) -> bool:
         print(f"  [FAIL] {track.title!r}: file is empty ({path})")
         return False
 
-    # 2. Decode with pydub
+    # 2. Decode with soundfile
     try:
-        from pydub import AudioSegment
+        import soundfile as sf
 
-        audio = AudioSegment.from_file(str(path))
+        audio, sample_rate = sf.read(str(path))
     except Exception as exc:
-        print(f"  [FAIL] {track.title!r}: pydub could not decode: {exc}")
+        print(f"  [FAIL] {track.title!r}: soundfile could not decode: {exc}")
         return False
 
     # 3. Duration check
-    duration_ms = len(audio)
-    if duration_ms < _MIN_DURATION_MS:
+    duration_s = len(audio) / sample_rate
+    if duration_s < _MIN_DURATION_S:
         print(
-            f"  [FAIL] {track.title!r}: too short ({duration_ms}ms < "
-            f"{_MIN_DURATION_MS}ms). File may be truncated."
+            f"  [FAIL] {track.title!r}: too short ({duration_s:.1f}s < "
+            f"{_MIN_DURATION_S}s). File may be truncated."
         )
         return False
 
     # 4. Channel check
-    if audio.channels < 1:
+    if audio.ndim == 1:
+        num_channels = 1
+    else:
+        num_channels = audio.shape[1]
+    
+    if num_channels < 1:
         print(f"  [FAIL] {track.title!r}: audio has no channels")
         return False
 
-    duration_s = duration_ms / 1000
     print(
         f"  [OK  ] {track.title!r} -- {duration_s:.1f}s, "
-        f"{audio.channels}ch, {audio.frame_rate}Hz, {size:,} bytes"
+        f"{num_channels}ch, {sample_rate}Hz, {size:,} bytes"
     )
     return True
 
 
 def main(music_dir: Path) -> int:
     try:
-        from pydub import AudioSegment  # noqa: F401
+        import soundfile as sf  # noqa: F401
     except ImportError:
-        print("ERROR: pydub is not installed. Run: pip install pydub")
+        print("ERROR: soundfile is not installed. Run: pip install soundfile")
         return 1
 
     print(f"Validating {len(TRACKS)} track(s) in {music_dir} ...")
