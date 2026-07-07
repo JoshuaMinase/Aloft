@@ -88,7 +88,10 @@ async def _generate_text(
             translation = await chat_completion(
                 client,
                 messages=[
-                    {"role": "system", "content": f"Translate the following to {language_name}. Return only the translation, no preamble."},
+                    {
+                        "role": "system",
+                        "content": f"Translate the following to {language_name}. Return only the translation, no preamble.",
+                    },
                     {"role": "user", "content": fact_text},
                 ],
                 temperature=0.3,

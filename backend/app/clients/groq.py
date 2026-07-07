@@ -16,7 +16,29 @@ _MAX_ATTEMPTS = 3
 _BACKOFF_BASE_SECONDS = 1.0
 
 
-_GROQ_SEMAPHORE = asyncio.Semaphore(3)
+def _get_semaphore() -> asyncio.Semaphore:
+    """Return a semaphore sized from config.
+
+    Uses a module-level cache keyed on the configured concurrency so the
+    same Semaphore is reused across calls (important — creating a new
+    Semaphore every call would defeat the purpose entirely).
+
+    Falls back to the default value of 3 if settings are unavailable
+    (e.g. in tests that mock the settings object).
+    """
+    try:
+        limit = get_settings().content_generation_max_concurrent
+    except (AttributeError, Exception):
+        # Settings not available (e.g. mock object in tests) — use safe default.
+        limit = 3
+    if _get_semaphore._cache_limit != limit:
+        _get_semaphore._sem = asyncio.Semaphore(limit)
+        _get_semaphore._cache_limit = limit
+    return _get_semaphore._sem
+
+
+_get_semaphore._cache_limit = -1  # type: ignore[attr-defined]
+_get_semaphore._sem = asyncio.Semaphore(3)  # type: ignore[attr-defined]
 
 
 class GroqClientError(Exception):
@@ -50,7 +72,7 @@ async def chat_completion(
     last_error: Exception | None = None
     retry_after_override: float | None = None
 
-    async with _GROQ_SEMAPHORE:
+    async with _get_semaphore():
         for attempt in range(1, _MAX_ATTEMPTS + 1):
             try:
                 response = await client.post(

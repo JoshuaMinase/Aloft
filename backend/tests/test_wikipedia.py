@@ -39,9 +39,17 @@ def no_real_sleep():
     """Every test in this file goes through retry logic that calls
     asyncio.sleep on failure -- patch it so tests run instantly instead of
     actually waiting out the backoff.
+
+    Also clear the module-level geosearch cache between tests so retry and
+    error-handling cases don't accidentally hit a cached response from an
+    earlier test (the cache key is derived purely from coordinates).
     """
+    from app.clients import wikipedia as wikipedia_client
+
+    wikipedia_client._geosearch_cache.clear()
     with patch("app.clients.wikipedia.asyncio.sleep", new=AsyncMock()):
         yield
+    wikipedia_client._geosearch_cache.clear()
 
 
 @pytest.mark.asyncio

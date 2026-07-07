@@ -13,8 +13,8 @@ from datetime import UTC, datetime
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
-from app.models.user import User
 from app.models.role import Role
+from app.models.user import User
 
 logger = logging.getLogger("aloft.services.user_repository")
 
@@ -45,8 +45,6 @@ def _doc_to_user(doc: dict) -> User:
         last_login_at=doc.get("last_login_at"),
         last_login_ip=doc.get("last_login_ip"),
         password_changed_at=doc.get("password_changed_at"),
-        password_reset_token=doc.get("password_reset_token"),
-        password_reset_expires=doc.get("password_reset_expires"),
         created_at=doc.get("created_at", datetime.now(UTC)),
         updated_at=doc.get("updated_at", datetime.now(UTC)),
     )
@@ -93,8 +91,8 @@ async def create_user(db: AsyncIOMotorDatabase, email: str, hashed_password: str
     }
     try:
         result = await db.users.insert_one(doc)
-    except DuplicateKeyError:
-        raise ValueError(f"A user with email '{email_lower}' already exists.")
+    except DuplicateKeyError as err:
+        raise ValueError(f"A user with email '{email_lower}' already exists.") from err
 
     logger.info("Created user %s", result.inserted_id)
 
@@ -118,33 +116,47 @@ async def update_user(db: AsyncIOMotorDatabase, user: User) -> None:
 
     try:
         oid = ObjectId(user.user_id)
-    except InvalidId:
-        raise ValueError(f"Invalid user_id: {user.user_id}")
+    except InvalidId as err:
+        raise ValueError(f"Invalid user_id: {user.user_id}") from err
 
-    update_doc = {
+    # Fields that are always written (booleans, counters, strings that are never
+    # intentionally cleared).
+    set_doc: dict = {
         "email": user.email,
         "hashed_password": user.hashed_password,
-        "role": user.role.value if hasattr(user.role, 'value') else str(user.role),
+        "role": user.role.value if hasattr(user.role, "value") else str(user.role),
         "is_active": user.is_active,
         "is_verified": user.is_verified,
         "mfa_enabled": user.mfa_enabled,
-        "mfa_secret": user.mfa_secret,
         "failed_login_attempts": user.failed_login_attempts,
+        "updated_at": datetime.now(UTC),
+    }
+
+    # Nullable fields that need explicit $unset when set to None so that
+    # clearing them (e.g. unlocking an account by setting locked_until=None)
+    # actually persists to MongoDB.
+    _NULLABLE_FIELDS = {
+        "mfa_secret": user.mfa_secret,
         "locked_until": user.locked_until,
         "last_login_at": user.last_login_at,
         "last_login_ip": user.last_login_ip,
         "password_changed_at": user.password_changed_at,
-        "password_reset_token": user.password_reset_token,
-        "password_reset_expires": user.password_reset_expires,
-        "updated_at": datetime.now(UTC),
     }
 
-    # Remove None values to avoid overwriting with null
-    update_doc = {k: v for k, v in update_doc.items() if v is not None}
+    unset_doc: dict = {}
+    for field, value in _NULLABLE_FIELDS.items():
+        if value is None:
+            unset_doc[field] = ""
+        else:
+            set_doc[field] = value
 
-    result = await db.users.update_one({"_id": oid}, {"$set": update_doc})
-    
+    mongo_update: dict = {"$set": set_doc}
+    if unset_doc:
+        mongo_update["$unset"] = unset_doc
+
+    result = await db.users.update_one({"_id": oid}, mongo_update)
+
     if result.matched_count == 0:
         raise ValueError(f"User not found: {user.user_id}")
-    
+
     logger.info("Updated user %s", user.user_id)

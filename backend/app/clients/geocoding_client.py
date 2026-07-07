@@ -21,10 +21,10 @@ GEOCODING_API_URL = "https://api.bigdatacloud.net/data/reverse-geocode-client"
 
 
 class RegionInfo(BaseModel):
-    description: str        # "North Atlantic Ocean" or "County Cork, Ireland"
-    is_ocean: bool          # True if over water
-    country: str | None     # None if over ocean
-    locality: str | None    # Most specific name available
+    description: str  # "North Atlantic Ocean" or "County Cork, Ireland"
+    is_ocean: bool  # True if over water
+    country: str | None  # None if over ocean
+    locality: str | None  # Most specific name available
 
 
 async def reverse_geocode(
@@ -46,14 +46,11 @@ async def reverse_geocode(
         return _parse_response(data)
     except Exception as exc:
         logger.warning("Reverse geocoding failed for (%s, %s): %s", lat, lng, exc)
-        return RegionInfo(
-            description="a remote area", is_ocean=False, country=None, locality=None
-        )
+        return RegionInfo(description="a remote area", is_ocean=False, country=None, locality=None)
 
 
 def _parse_response(data: dict) -> RegionInfo:
     country = data.get("countryName")
-    continent = data.get("continent") or ""
     locality = data.get("locality") or data.get("city") or None
     principal_subdivision = data.get("principalSubdivision") or ""
 

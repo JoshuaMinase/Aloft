@@ -6,7 +6,7 @@ target-version = "py311"
 select = ["E", "F", "I", "UP", "B", "SIM"]
 # E501: handled by line-length above.
 # B008: Depends(...) as a default argument is FastAPI's actual intended
-# pattern, not the mutable-default-argument bug this rule is meant to catch.
+# pattern, not the mutable-default-argument issue this rule is meant to catch.
 ignore = ["E501", "B008"]
 
 [tool.ruff.lint.isort]
@@ -16,3 +16,15 @@ known-first-party = ["app"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
+norecursedirs = ["scripts"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+markers = [
+    "skip_audio: Skip audio mixing tests (pydub incompatible with Python 3.13)",
+]
+# pydub is incompatible with Python 3.13 (audioop module removed)
+# Skip audio mixing tests until pydub is updated or alternative is found
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]

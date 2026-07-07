@@ -4,9 +4,6 @@ import pytest
 from mongomock_motor import AsyncMongoMockClient
 
 from app.core.db import ensure_indexes
-from app.core.dependencies import get_database, get_current_user
-from app.core.redis_client import get_redis
-from app.main import app
 from app.models.user import User
 from app.services.route_bundle_repository import save_route_bundle
 
@@ -33,13 +30,17 @@ async def mongomock_db():
 def mock_redis():
     """Create a mock Redis client for testing."""
     client = AsyncMock()
+
     # Make the methods return async-compatible values
     async def fake_set(*args, **kwargs):
         return True
+
     async def fake_get(*args, **kwargs):
         return None
+
     async def fake_lpush(*args, **kwargs):
         return True
+
     client.set = fake_set
     client.get = fake_get
     client.lpush = fake_lpush
@@ -69,7 +70,8 @@ async def test_start_content_generation_creates_job(mongomock_db, mock_redis):
     # Mock get_redis to return our mock
     with patch("app.routers.content.get_redis", return_value=mock_redis):
         from app.routers.content import start_content_generation
-        result = await start_content_generation(bundle.route_key, "en", mongomock_db, _FAKE_USER)
+
+        result = await start_content_generation(bundle.route_key, "en", mongomock_db, mock_redis, _FAKE_USER)
 
     assert result.job_id is not None
     assert result.route_key == bundle.route_key
@@ -82,12 +84,15 @@ async def test_start_content_generation_creates_job(mongomock_db, mock_redis):
 @pytest.mark.asyncio
 async def test_start_content_generation_404_for_unknown_route(mongomock_db, mock_redis):
     """Test that start_content_generation returns 404 for unknown route."""
-    from app.routers.content import start_content_generation
     from fastapi import HTTPException
 
-    with patch("app.routers.content.get_redis", return_value=mock_redis):
-        with pytest.raises(HTTPException) as exc_info:
-            await start_content_generation("no-such-route", "en", mongomock_db, _FAKE_USER)
+    from app.routers.content import start_content_generation
+
+    with (
+        patch("app.routers.content.get_redis", return_value=mock_redis),
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await start_content_generation("no-such-route", "en", mongomock_db, mock_redis, _FAKE_USER)
 
     assert exc_info.value.status_code == 404
     assert "No route found" in exc_info.value.detail
@@ -96,14 +101,17 @@ async def test_start_content_generation_404_for_unknown_route(mongomock_db, mock
 @pytest.mark.asyncio
 async def test_start_content_generation_503_without_redis(mongomock_db):
     """Test that start_content_generation returns 503 when Redis is unavailable."""
-    from app.routers.content import start_content_generation
     from fastapi import HTTPException
+
+    from app.routers.content import start_content_generation
 
     bundle = await save_route_bundle(mongomock_db, ADD, DXB, ["wikipedia:1001"])
 
-    with patch("app.routers.content.get_redis", return_value=None):
-        with pytest.raises(HTTPException) as exc_info:
-            await start_content_generation(bundle.route_key, "en", mongomock_db, _FAKE_USER)
+    with (
+        patch("app.routers.content.get_redis", return_value=None),
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await start_content_generation(bundle.route_key, "en", mongomock_db, None, _FAKE_USER)
 
     assert exc_info.value.status_code == 503
     assert "Redis not configured" in exc_info.value.detail
@@ -112,17 +120,20 @@ async def test_start_content_generation_503_without_redis(mongomock_db):
 @pytest.mark.asyncio
 async def test_get_content_generation_status_404_for_unknown_job(mock_redis):
     """Test that get_content_generation_status returns 404 for unknown job."""
-    from app.routers.content import get_content_generation_status
     from fastapi import HTTPException
+
+    from app.routers.content import get_content_generation_status
 
     async def fake_get_none(*args, **kwargs):
         return None
 
     mock_redis.get = fake_get_none
 
-    with patch("app.routers.content.get_redis", return_value=mock_redis):
-        with pytest.raises(HTTPException) as exc_info:
-            await get_content_generation_status("test-route", "non-existent", _FAKE_USER)
+    with (
+        patch("app.routers.content.get_redis", return_value=mock_redis),
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await get_content_generation_status("test-route", "non-existent", _FAKE_USER)
 
     assert exc_info.value.status_code == 404
     assert "not found" in exc_info.value.detail
@@ -131,9 +142,10 @@ async def test_get_content_generation_status_404_for_unknown_job(mock_redis):
 @pytest.mark.asyncio
 async def test_get_content_generation_status_returns_job_status(mock_redis):
     """Test that get_content_generation_status returns job status correctly."""
+    import json
+
     from app.routers.content import get_content_generation_status
 
-    import json
     job_data = {
         "job_id": "test-job-123",
         "route_key": "test-route",

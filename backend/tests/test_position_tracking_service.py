@@ -137,8 +137,7 @@ def test_upcoming_respects_custom_lookahead():
 
     # Should NOT be found with 100km lookahead
     assert (
-        find_next_upcoming_poi(*CURRENT_POS, [moderately_close], set(), lookahead_km=100.0)
-        is None
+        find_next_upcoming_poi(*CURRENT_POS, [moderately_close], set(), lookahead_km=100.0) is None
     )
 
 
@@ -160,4 +159,3 @@ def test_upcoming_includes_already_narrated_in_exclusion_set():
     assert result is not None
     poi, _ = result
     assert poi.source_id == "wikipedia:pending"
-

@@ -26,9 +26,8 @@ from mongomock_motor import AsyncMongoMockClient
 from app.clients.aviationstack import AVIATIONSTACK_BASE_URL
 from app.core.config import get_settings
 from app.core.db import ensure_indexes
-from app.core.dependencies import get_database, get_http_client
+from app.core.dependencies import get_database, get_http_client, get_redis
 from app.main import app
-from app.services.content_generation_service import PoiContentResult
 from app.services.route_bundle_repository import save_route_bundle
 
 ADD = (8.9806, 38.7992)
@@ -67,6 +66,7 @@ def fake_redis() -> Iterator[fakeredis.aioredis.FakeRedis]:
 def test_client(db, fake_redis, auth_override) -> Iterator[TestClient]:
     app.dependency_overrides[get_database] = lambda: db
     app.dependency_overrides[get_http_client] = lambda: httpx.AsyncClient()
+    app.dependency_overrides[get_redis] = lambda: fake_redis
     yield TestClient(app)
     app.dependency_overrides.clear()
 
@@ -81,7 +81,7 @@ def test_flight_lookup_allows_requests_under_the_limit(test_client):
         respx.get(f"{AVIATIONSTACK_BASE_URL}/airports").mock(return_value=httpx.Response(404))
 
         for _ in range(limit):
-            response = test_client.post("/flights/ET409/pois")
+            response = test_client.post("/v1/flights/ET409/pois")
             assert response.status_code != 429
 
 
@@ -95,9 +95,9 @@ def test_flight_lookup_returns_429_once_limit_exceeded(test_client):
         respx.get(f"{AVIATIONSTACK_BASE_URL}/airports").mock(return_value=httpx.Response(404))
 
         for _ in range(limit):
-            test_client.post("/flights/ET409/pois")
+            test_client.post("/v1/flights/ET409/pois")
 
-        response = test_client.post("/flights/ET409/pois")
+        response = test_client.post("/v1/flights/ET409/pois")
 
     assert response.status_code == 429
     assert "Retry-After" in response.headers
@@ -107,18 +107,12 @@ def test_flight_lookup_returns_429_once_limit_exceeded(test_client):
 async def test_content_generation_returns_429_once_limit_exceeded(test_client, db):
     limit = get_settings().rate_limit_content_generation_per_hour
     bundle = await save_route_bundle(db, ADD, DXB, ["wikipedia:1001"])
-    fake_results = [
-        PoiContentResult(
-            poi_source_id="wikipedia:1001",
-            story_ready=True,
-            audio_ready=True,
-            images_found=1,
-        )
-    ]
 
+    # Bypass the real (Redis-backed) job creation so we can exercise the
+    # rate-limit dependency in isolation. create_content_job returns a job_id.
     with patch(
-        "app.routers.content.generate_content_for_route",
-        new=AsyncMock(return_value=fake_results),
+        "app.routers.content.create_content_job",
+        new=AsyncMock(return_value="fake-job-id"),
     ):
         for _ in range(limit):
             response = test_client.post(f"/v1/routes/{bundle.route_key}/content")

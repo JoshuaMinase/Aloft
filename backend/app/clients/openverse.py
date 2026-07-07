@@ -163,7 +163,9 @@ async def _get_auth_headers(
             if _token_cache and _token_cache["expires_at"] > now + 60:
                 token = _token_cache["token"]
             else:
-                token = await _fetch_oauth_token(client, client_id, client_secret.get_secret_value())
+                token = await _fetch_oauth_token(
+                    client, client_id, client_secret.get_secret_value()
+                )
                 # Openverse tokens are valid for 24 hours; cache for 23h55m to be safe.
                 _token_cache = {"token": token, "expires_at": now + 86100}
         return {

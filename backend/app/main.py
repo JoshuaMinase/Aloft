@@ -12,19 +12,17 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import get_settings
+from app.core.config_validation import validate_configuration
 from app.core.db import close_mongo_connection, connect_to_mongo
-from app.core.redis import close_redis_connection, connect_to_redis
-from app.core.redis_client import (
-    close_redis_connection as close_rate_limit_redis,
-    connect_to_redis as connect_rate_limit_redis,
-    get_redis,
-)
+from app.core.logging_config import LoggingMiddleware, setup_logging
+from app.core.redis import close_redis_connection, connect_to_redis, get_optional_redis
 from app.middleware.security import (
+    CSPReportMiddleware,
     RateLimitLoggingMiddleware,
     RequestLoggingMiddleware,
     SecurityHeadersMiddleware,
 )
-from app.routers import audio, auth, content, flights, gdpr, images, legal, pois, sessions, stories
+from app.routers import audio, auth, content, favorites, flights, gdpr, images, journal, legal, location_flights, pois, sessions, stories, upcoming_flights
 
 # ---------------------------------------------------------------------------
 # Structured JSON logging (production) / plain text (development)
@@ -61,7 +59,7 @@ class _JsonFormatter(logging.Formatter):
 
 
 def _configure_logging() -> None:
-    """Set up the root logger.
+    """Set up the root logger with structured logging.
 
     - ENVIRONMENT=production  → JSON formatter to stdout (log aggregator friendly)
     - Any other value         → human-readable format to stdout (dev/test friendly)
@@ -69,24 +67,12 @@ def _configure_logging() -> None:
     Either way, the log level is controlled by LOG_LEVEL (default INFO).
     """
     settings = get_settings()
-    level = getattr(logging, settings.log_level.upper(), logging.INFO)
-
-    if settings.environment.lower() == "production":
-        handler = logging.StreamHandler()
-        handler.setFormatter(_JsonFormatter())
-    else:
-        handler = logging.StreamHandler()
-        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
-
-    logging.root.handlers.clear()
-    logging.root.addHandler(handler)
-    logging.root.setLevel(level)
-
-    # Quiet down noisy third-party loggers that aren't useful in production
-    logging.getLogger("httpx").setLevel(logging.WARNING)
-    logging.getLogger("httpcore").setLevel(logging.WARNING)
-    logging.getLogger("motor").setLevel(logging.WARNING)
-    logging.getLogger("pymongo").setLevel(logging.WARNING)
+    log_format = "json" if settings.environment.lower() == "production" else "console"
+    setup_logging(
+        environment=settings.environment,
+        log_level=settings.log_level,
+        log_format=log_format,
+    )
 
 
 _configure_logging()
@@ -101,6 +87,15 @@ logger = logging.getLogger("aloft.main")
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
+
+    # Validate configuration before starting
+    try:
+        validate_configuration(settings)
+        logger.info("Configuration validation passed")
+    except Exception as exc:
+        logger.error("FATAL: Configuration validation failed: %s", exc)
+        raise
+
     try:
         await connect_to_mongo()
     except Exception as exc:
@@ -111,24 +106,37 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception as exc:
         logger.error("FATAL: Redis connection failed: %s", exc)
         raise
+
+    # Initialize security monitor with Redis if available
     try:
-        await connect_rate_limit_redis()
-    except Exception as exc:
-        logger.error("FATAL: Rate-limit Redis connection failed: %s", exc)
-        raise
+        from app.services.security_monitoring import init_security_monitor
+
+        init_security_monitor(get_optional_redis())
+    except Exception:
+        from app.services.security_monitoring import init_security_monitor
+
+        init_security_monitor(None)
+
     app.state.http_client = httpx.AsyncClient()
 
     # Start background content worker if Redis is available
     worker_task = None
-    redis_client = get_redis()
+    notification_task = None
+    redis_client = get_optional_redis()
     if redis_client is not None:
-        from app.services.content_worker import run_worker
         from app.core.db import get_db
+        from app.services.content_worker import run_worker
+
         db = get_db()
-        worker_task = asyncio.create_task(
-            run_worker(redis_client, db, app.state.http_client)
-        )
+        worker_task = asyncio.create_task(run_worker(redis_client, db, app.state.http_client))
         logger.info("Content generation worker started")
+        
+        # Start notification worker for pre-flight notifications
+        from app.services.notification_worker import run_notification_worker
+        notification_task = asyncio.create_task(
+            run_notification_worker(db, app.state.http_client)
+        )
+        logger.info("Notification worker started")
     else:
         logger.warning("Redis not available -- content generation worker disabled")
 
@@ -138,7 +146,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             "JWT_SECRET_KEY is set to the insecure default value. "
             "All tokens are trivially forgeable. "
             "Set a strong random secret in your .env file: "
-            "python -c \"import secrets; print(secrets.token_hex(32))\""
+            'python -c "import secrets; print(secrets.token_hex(32))"'
         )
     logger.info(
         "Aloft backend started",
@@ -148,13 +156,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     if worker_task is not None:
         worker_task.cancel()
-        try:
+        import contextlib
+
+        with contextlib.suppress(asyncio.CancelledError):
             await worker_task
-        except asyncio.CancelledError:
-            pass
+    
+    if notification_task is not None:
+        notification_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await notification_task
 
     await app.state.http_client.aclose()
-    await close_rate_limit_redis()
     await close_redis_connection()
     await close_mongo_connection()
     logger.info("Aloft backend shut down")
@@ -173,7 +185,7 @@ app = FastAPI(
         "All endpoints are now prefixed with `/v1/` for version control. "
         "This ensures backward compatibility when future API changes are introduced.\n\n"
         "**Authentication:**\n"
-        "All endpoints except `/health`, `POST /v1/auth/signup`, `GET /v1/auth/verify-email`, "
+        "All endpoints except `/health`, `POST /v1/auth/signup`, `POST /v1/auth/verify-email`, "
         "`POST /v1/auth/resend-verification`, `POST /v1/auth/login`, `POST /v1/auth/refresh`, "
         "`POST /v1/auth/forgot-password`, and `POST /v1/auth/reset-password` "
         "require a valid JWT access token.\n"
@@ -196,7 +208,11 @@ app = FastAPI(
         "5. `POST /v1/sessions` — start a live flight session\n"
         "6. `POST /v1/sessions/{session_id}/position` — send GPS, get narration triggers\n\n"
         "**Or, all-in-one by flight number:**\n"
-        "`POST /v1/flights/{flight_iata}/pois` — looks up the route via AviationStack then runs step 2."
+        "`POST /v1/flights/{flight_iata}/pois` — looks up the route via AviationStack then runs step 2.\n\n"
+        "**Location-based discovery:**\n"
+        "`GET /v1/flights/location/airports/nearby?lat=X&lng=Y` — find airports near your location\n"
+        "`GET /v1/flights/location/recommendations?lat=X&lng=Y` — get flights departing from nearby airports\n"
+        "`GET /v1/flights/location/city/{city_name}` — get flights departing from a specific city"
     ),
     contact={"name": "Aloft", "email": get_settings().app_contact_email},
     license_info={"name": "MIT"},
@@ -206,6 +222,10 @@ app = FastAPI(
 # ---------------------------------------------------------------------------
 # Security Middleware
 # ---------------------------------------------------------------------------
+# Add correlation ID and structured logging middleware
+app.add_middleware(LoggingMiddleware)
+# Add CSP report handler for report-only mode
+app.add_middleware(CSPReportMiddleware)
 # Add security headers and logging middleware
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(RequestLoggingMiddleware)
@@ -217,7 +237,9 @@ app.add_middleware(RateLimitLoggingMiddleware)
 # Configure CORS for frontend integration. In production, replace "*" with
 # specific allowed origins for security.
 settings = get_settings()
-allowed_origins = settings.cors_allowed_origins if hasattr(settings, 'cors_allowed_origins') else ["*"]
+allowed_origins = (
+    settings.cors_allowed_origins if hasattr(settings, "cors_allowed_origins") else ["*"]
+)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
@@ -239,6 +261,10 @@ app.include_router(images.router)
 app.include_router(sessions.router)
 app.include_router(legal.router)
 app.include_router(gdpr.router)
+app.include_router(journal.router)
+app.include_router(favorites.router)
+app.include_router(upcoming_flights.router)
+app.include_router(location_flights.router)
 
 
 @app.get("/health", tags=["meta"], summary="Health check")
@@ -293,6 +319,7 @@ async def health_ready() -> dict:
 
     if failed:
         from fastapi.responses import JSONResponse
+
         return JSONResponse(status_code=503, content={"status": "degraded", **result})
 
     return {"status": "ok", **result}

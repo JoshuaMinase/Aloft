@@ -19,10 +19,12 @@ async def get_stories_batch(
     """Fetch multiple stories for the same language in one query."""
     if not poi_source_ids:
         return []
-    cursor = db.stories.find({
-        "poi_source_id": {"$in": poi_source_ids},
-        "language": language,
-    })
+    cursor = db.stories.find(
+        {
+            "poi_source_id": {"$in": poi_source_ids},
+            "language": language,
+        }
+    )
     stories = []
     async for doc in cursor:
         doc.pop("_id", None)

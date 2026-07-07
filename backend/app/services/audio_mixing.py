@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import io
-import sys
 import tempfile
 from pathlib import Path
 
 # Handle Python 3.13 compatibility - audioop was removed
 try:
     from pydub import AudioSegment
+
     _PYDUB_AVAILABLE = True
 except (ImportError, ModuleNotFoundError):
     _PYDUB_AVAILABLE = False
@@ -17,6 +17,7 @@ except (ImportError, ModuleNotFoundError):
 try:
     import numpy as np
     import soundfile as sf
+
     _NUMPY_AVAILABLE = True
 except (ImportError, ModuleNotFoundError):
     _NUMPY_AVAILABLE = False
@@ -44,11 +45,11 @@ def mix_narration_with_music(narration_bytes: bytes, music_file_path: str) -> by
     # Try numpy + soundfile first (Python 3.13+ compatible)
     if _NUMPY_AVAILABLE:
         return _mix_with_numpy(narration_bytes, music_file_path)
-    
+
     # Fall back to pydub (Python 3.12 and earlier)
     if _PYDUB_AVAILABLE:
         return _mix_with_pydub(narration_bytes, music_file_path)
-    
+
     raise AudioMixingError(
         "Audio mixing requires either numpy+soundfile (Python 3.13+) or pydub (Python 3.12-). "
         "Install with: pip install numpy soundfile"
@@ -60,55 +61,56 @@ def _mix_with_numpy(narration_bytes: bytes, music_file_path: str) -> bytes:
     try:
         # Detect input format
         fmt = _detect_format(narration_bytes)
-        
+
         # Load narration audio
         with tempfile.NamedTemporaryFile(suffix=f".{fmt}", delete=False) as temp_narration:
             temp_narration.write(narration_bytes)
             temp_narration_path = temp_narration.name
-        
+
         try:
             narration_audio, sr = sf.read(temp_narration_path, always_2d=True)
         finally:
             Path(temp_narration_path).unlink(missing_ok=True)
-        
+
         # Load music audio
         try:
             music_audio, music_sr = sf.read(music_file_path, always_2d=True)
         except Exception as exc:
             raise AudioMixingError(f"Could not read music file '{music_file_path}': {exc}") from exc
-        
+
         # Resample music to match narration if needed (simple linear interpolation)
         if music_sr != sr:
             import numpy as np
+
             num_samples = int(len(music_audio) * sr / music_sr)
             indices = np.linspace(0, len(music_audio) - 1, num_samples)
             music_audio = music_audio[np.clip(indices.astype(int), 0, len(music_audio) - 1)]
-        
+
         # Reduce music volume and fit to narration duration
         music_audio = _fit_music_to_narration(music_audio, len(narration_audio))
-        
+
         # Apply fade in/out to music
         music_audio = _apply_fade(music_audio, _FADE_MS, sr)
-        
+
         # Mix narration with music (narration takes priority)
         mixed_audio = narration_audio + music_audio
-        
+
         # Normalize to prevent clipping
         max_val = np.max(np.abs(mixed_audio))
         if max_val > 0.95:
             mixed_audio = mixed_audio / max_val * 0.95
-        
+
         # Export to bytes
         with tempfile.NamedTemporaryFile(suffix=f".{fmt}", delete=False) as temp_output:
             temp_output_path = temp_output.name
-        
+
         try:
             sf.write(temp_output_path, mixed_audio, sr)
-            with open(temp_output_path, 'rb') as f:
+            with open(temp_output_path, "rb") as f:
                 return f.read()
         finally:
             Path(temp_output_path).unlink(missing_ok=True)
-            
+
     except Exception as exc:
         raise AudioMixingError(f"Audio mixing failed: {exc}") from exc
 
@@ -138,37 +140,37 @@ def _fit_music_to_narration(music: np.ndarray, narration_length: int) -> np.ndar
     """Fit music to narration duration by looping or trimming."""
     if len(music) == 0:
         return np.zeros((narration_length, music.shape[1]))
-    
+
     if len(music) >= narration_length:
         return music[:narration_length] * _MUSIC_VOLUME_RATIO
-    
+
     # Loop music to match narration length
     looped = music.copy()
     while len(looped) < narration_length:
         looped = np.concatenate([looped, music])
-    
+
     return looped[:narration_length] * _MUSIC_VOLUME_RATIO
 
 
 def _apply_fade(audio: np.ndarray, fade_ms: int, sample_rate: int) -> np.ndarray:
     """Apply fade in/out to audio."""
     fade_samples = int(fade_ms * sample_rate / 1000)
-    
+
     if len(audio) < 2 * fade_samples:
         # Audio too short for full fade, just apply half fade
         fade_samples = len(audio) // 2
-    
+
     if fade_samples <= 0:
         return audio
-    
+
     # Fade in
     fade_in_curve = np.linspace(0, 1, fade_samples)
     audio[:fade_samples] *= fade_in_curve[:, np.newaxis]
-    
+
     # Fade out
     fade_out_curve = np.linspace(1, 0, fade_samples)
     audio[-fade_samples:] *= fade_out_curve[:, np.newaxis]
-    
+
     return audio
 
 

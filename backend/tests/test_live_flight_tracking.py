@@ -11,15 +11,10 @@ from fastapi.testclient import TestClient
 from mongomock_motor import AsyncMongoMockClient
 
 from app.clients.aviationstack import AVIATIONSTACK_BASE_URL
-from app.core.dependencies import get_database, get_http_client, get_redis, get_current_user
+from app.core.dependencies import get_current_user, get_database, get_http_client, get_redis
 from app.main import app
-from app.services.poi_repository import save_pois
-from app.services.route_bundle_repository import save_route_bundle
-from app.services.story_repository import save_story
-from app.models.story import Story
-from app.clients.wikipedia import RawPoi
 
-LHR = (51.4700, -0.4543)      # lat, lng
+LHR = (51.4700, -0.4543)  # lat, lng
 DXB = (25.2532, 55.3657)
 
 _OPEN_SKY_URL = "https://opensky-network.org/api/states/all"
@@ -31,6 +26,7 @@ async def db():
     client = AsyncMongoMockClient()
     database = client["test_aloft"]
     from app.core.db import ensure_indexes
+
     await ensure_indexes(database)
     return database
 
@@ -38,6 +34,7 @@ async def db():
 @pytest.fixture
 async def redis():
     import fakeredis.aioredis as fakeredis
+
     server = fakeredis.FakeRedis()
     yield server
     await server.aclose()
@@ -55,6 +52,7 @@ def test_client(db, redis):
 
 def _fake_user():
     from app.models.user import User
+
     return User(
         user_id="000000000000000000000001",
         email="testuser@example.com",
@@ -149,9 +147,7 @@ def test_live_track_returns_stories_when_opensky_available(test_client, db, redi
     respx.get(_OPEN_SKY_URL).mock(
         return_value=httpx.Response(200, json={"states": [_OPEN_SKY_STATE]})
     )
-    respx.get(_WIKI_URL).mock(
-        return_value=httpx.Response(200, json=_WIKI_GEOSEARCH_RESPONSE)
-    )
+    respx.get(_WIKI_URL).mock(return_value=httpx.Response(200, json=_WIKI_GEOSEARCH_RESPONSE))
 
     response = test_client.post("/v1/flights/BA178/live")
 
@@ -184,12 +180,8 @@ def test_live_track_still_works_when_opensky_unavailable(test_client, db, redis)
             httpx.Response(200, json=DXB_AIRPORT_RESPONSE),
         ]
     )
-    respx.get(_OPEN_SKY_URL).mock(
-        return_value=httpx.Response(200, json={"states": []})
-    )
-    respx.get(_WIKI_URL).mock(
-        return_value=httpx.Response(200, json=_WIKI_GEOSEARCH_RESPONSE)
-    )
+    respx.get(_OPEN_SKY_URL).mock(return_value=httpx.Response(200, json={"states": []}))
+    respx.get(_WIKI_URL).mock(return_value=httpx.Response(200, json=_WIKI_GEOSEARCH_RESPONSE))
 
     response = test_client.post("/v1/flights/BA178/live")
 
@@ -228,9 +220,7 @@ def test_live_track_includes_cached_stories_when_available(test_client, db, redi
     respx.get(_OPEN_SKY_URL).mock(
         return_value=httpx.Response(200, json={"states": [_OPEN_SKY_STATE]})
     )
-    respx.get(_WIKI_URL).mock(
-        return_value=httpx.Response(200, json=_WIKI_GEOSEARCH_RESPONSE)
-    )
+    respx.get(_WIKI_URL).mock(return_value=httpx.Response(200, json=_WIKI_GEOSEARCH_RESPONSE))
 
     response = test_client.post("/v1/flights/BA178/live")
 
@@ -261,20 +251,51 @@ def test_live_track_session_can_be_polled_after_creation(test_client, db, redis)
     respx.get(_OPEN_SKY_URL).mock(
         return_value=httpx.Response(200, json={"states": [_OPEN_SKY_STATE]})
     )
-    respx.get(_WIKI_URL).mock(
-        return_value=httpx.Response(200, json=_WIKI_GEOSEARCH_RESPONSE)
-    )
+    respx.get(_WIKI_URL).mock(return_value=httpx.Response(200, json=_WIKI_GEOSEARCH_RESPONSE))
 
-    live_response = test_client.post("/v1/flights/BA178/live")
-    assert live_response.status_code == 200
-    session_id = live_response.json()["session_id"]
+    # The position-poll endpoint can fire reverse-geocode / destination-tour /
+    # upcoming / region narration calls. Stub those so the smoke test focuses
+    # on the wiring (session_id -> position endpoint) without hitting external
+    # APIs that respx would otherwise treat as unmocked.
+    from unittest.mock import AsyncMock, patch
 
-    pos_response = test_client.post(
-        f"/v1/sessions/{session_id}/position",
-        json={"lat": 51.3, "lng": 3.5, "language": "en", "trigger_radius_km": 50},
-    )
-    assert pos_response.status_code == 200
-    assert "triggered" in pos_response.json()
+    from app.models.story import Story
+
+    with (
+        patch(
+            "app.routers.sessions.reverse_geocode",
+            new=AsyncMock(
+                return_value=type(
+                    "RegionInfo",
+                    (),
+                    {"description": "North Sea", "is_ocean": True, "country": None, "locality": None},
+                )()
+            ),
+        ),
+        patch("app.routers.sessions.prepare_destination_tour", new=AsyncMock(return_value=[])),
+        patch(
+            "app.routers.sessions.generate_upcoming_story",
+            new=AsyncMock(
+                return_value=Story(
+                    poi_source_id="wikipedia:9001",
+                    language="en",
+                    text_content="Upcoming story.",
+                    model_version="test-model",
+                )
+            ),
+        ),
+        patch("app.routers.sessions.generate_region_narration", new=AsyncMock(return_value=None)),
+    ):
+        live_response = test_client.post("/v1/flights/BA178/live")
+        assert live_response.status_code == 200
+        session_id = live_response.json()["session_id"]
+
+        pos_response = test_client.post(
+            f"/v1/sessions/{session_id}/position",
+            json={"lat": 51.3, "lng": 3.5, "language": "en", "trigger_radius_km": 50},
+        )
+        assert pos_response.status_code == 200
+        assert "triggered" in pos_response.json()
 
 
 @respx.mock
@@ -295,9 +316,7 @@ def test_live_track_generates_missing_stories_when_enabled(test_client, db, redi
     respx.get(_OPEN_SKY_URL).mock(
         return_value=httpx.Response(200, json={"states": [_OPEN_SKY_STATE]})
     )
-    respx.get(_WIKI_URL).mock(
-        return_value=httpx.Response(200, json=_WIKI_GEOSEARCH_RESPONSE)
-    )
+    respx.get(_WIKI_URL).mock(return_value=httpx.Response(200, json=_WIKI_GEOSEARCH_RESPONSE))
 
     response = test_client.post("/v1/flights/BA178/live?generate_missing_stories=true")
     assert response.status_code == 200

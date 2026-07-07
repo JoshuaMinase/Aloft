@@ -1,7 +1,6 @@
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
-import redis.asyncio as redis
 
 from app.services.content_job_service import (
     JobStatus,
@@ -15,13 +14,17 @@ from app.services.content_job_service import (
 async def mock_redis():
     """Create a mock Redis client for testing."""
     client = AsyncMock()
+
     # Make the methods return async-compatible values
     async def fake_set(*args, **kwargs):
         return True
+
     async def fake_get(*args, **kwargs):
         return None
+
     async def fake_lpush(*args, **kwargs):
         return True
+
     client.set = fake_set
     client.get = fake_get
     client.lpush = fake_lpush
@@ -59,6 +62,7 @@ async def test_create_content_job(mock_redis):
     # Verify job was stored
     assert f"job:{job_id}" in stored_job_data
     import json
+
     parsed_job = json.loads(stored_job_data[f"job:{job_id}"])
     assert parsed_job["job_id"] == job_id
     assert parsed_job["route_key"] == route_key
@@ -110,6 +114,7 @@ async def test_get_job_status(mock_redis):
 @pytest.mark.asyncio
 async def test_get_job_status_not_found(mock_redis):
     """Test that get_job_status returns None for non-existent job."""
+
     async def fake_get_none(key, *args, **kwargs):
         return None
 
@@ -209,6 +214,7 @@ async def test_update_job_progress_with_error(mock_redis):
 @pytest.mark.asyncio
 async def test_update_job_progress_job_not_found(mock_redis):
     """Test that update_job_progress handles missing job gracefully."""
+
     async def fake_get_none(key, *args, **kwargs):
         return None
 

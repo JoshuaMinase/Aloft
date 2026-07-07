@@ -8,11 +8,11 @@ from app.models.poi import Poi
 # Synthetic page_id ranges assigned by poi_service for non-Wikipedia sources.
 # Negative IDs signal a non-Wikipedia source; the range determines which one.
 # These must match the ranges in app/services/poi_service.py.
-_WIKIDATA_ID_FLOOR = -(1_000_000_000)          # Wikidata: -(1e9 + Q-number)
-_GEONAMES_ID_FLOOR = -(2_000_000_000)          # GeoNames: -(2e9 + geonames_id)
-_OVERPASS_NODE_FLOOR = -(3_000_000_000)        # Overpass nodes: -(3e9 + osm_id)
-_OVERPASS_WAY_FLOOR = -(4_000_000_000)         # Overpass ways
-_OVERPASS_RELATION_FLOOR = -(5_000_000_000)    # Overpass relations
+_WIKIDATA_ID_FLOOR = -(1_000_000_000)  # Wikidata: -(1e9 + Q-number)
+_GEONAMES_ID_FLOOR = -(2_000_000_000)  # GeoNames: -(2e9 + geonames_id)
+_OVERPASS_NODE_FLOOR = -(3_000_000_000)  # Overpass nodes: -(3e9 + osm_id)
+_OVERPASS_WAY_FLOOR = -(4_000_000_000)  # Overpass ways
+_OVERPASS_RELATION_FLOOR = -(5_000_000_000)  # Overpass relations
 
 
 def _source_and_id_from_raw(raw: RawPoi) -> tuple[str, str]:

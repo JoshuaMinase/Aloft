@@ -8,7 +8,7 @@ All tracks are sourced from various free music sources under permissive licenses
 DOWNLOADING TRACKS
 ==================
 Tracks are not bundled with this repo. Download them once and store locally
-(default path: ./music_assets/). 
+(default path: ./music_assets/).
 
 Current tracks are from:
 - OpenGameArt.org (CC0/Public Domain)

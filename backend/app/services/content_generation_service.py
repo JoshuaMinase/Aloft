@@ -51,7 +51,12 @@ async def generate_content_for_route(
     skip_audio skips audio synthesis (useful when ElevenLabs quota is exhausted).
     """
     from app.core.config import get_settings
-    concurrency = max_concurrent if max_concurrent is not None else get_settings().content_generation_max_concurrent
+
+    concurrency = (
+        max_concurrent
+        if max_concurrent is not None
+        else get_settings().content_generation_max_concurrent
+    )
     semaphore = asyncio.Semaphore(concurrency)
 
     async def _bounded(source_id: str) -> PoiContentResult:
@@ -62,7 +67,11 @@ async def generate_content_for_route(
 
 
 async def _generate_content_for_one_poi(
-    client: httpx.AsyncClient, db: AsyncIOMotorDatabase, source_id: str, language: str, skip_audio: bool = False
+    client: httpx.AsyncClient,
+    db: AsyncIOMotorDatabase,
+    source_id: str,
+    language: str,
+    skip_audio: bool = False,
 ) -> PoiContentResult:
     poi = await get_poi(db, source_id)
     if poi is None:
@@ -81,16 +90,23 @@ async def _generate_content_for_one_poi(
 
     images_found = 0
     image_source: Literal["wikipedia", "openverse", ""] | None = ""
-    # --- Primary: Wikipedia images ---
-    try:
-        images = await get_images(client, poi.name)
-        if images:
-            await save_poi_images(db, source_id, [image.url for image in images])
-            images_found = len(images)
-            image_source = "wikipedia"
-    except WikipediaClientError as exc:
-        logger.warning("Wikipedia image fetch failed for %s: %s", source_id, exc)
-        error = error or f"Wikipedia image fetch failed: {exc}"
+    
+    # --- Check cache before calling Wikipedia ---
+    if poi.image_refs:
+        # Images already exist, skip Wikipedia call entirely
+        images_found = len(poi.image_refs)
+        image_source = "cached"
+    else:
+        # --- Primary: Wikipedia images ---
+        try:
+            images = await get_images(client, poi.name)
+            if images:
+                await save_poi_images(db, source_id, [image.url for image in images])
+                images_found = len(images)
+                image_source = "wikipedia"
+        except WikipediaClientError as exc:
+            logger.warning("Wikipedia image fetch failed for %s: %s", source_id, exc)
+            error = error or f"Wikipedia image fetch failed: {exc}"
 
     # --- Fallback: Openverse ---
     if images_found == 0:

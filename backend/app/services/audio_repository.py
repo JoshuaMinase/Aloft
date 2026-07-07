@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import subprocess
 from functools import lru_cache, partial
 from pathlib import Path
 
@@ -42,6 +43,21 @@ logger = logging.getLogger("aloft.services.audio_repository")
 # R2 object keys are stored in MongoDB prefixed with this string so read
 # paths know to fetch from R2 rather than the local filesystem.
 _R2_PREFIX = "r2:"
+
+
+def _compress_audio(input_bytes: bytes) -> bytes:
+    """Compress MP3 to 64kbps — half size, same quality for speech."""
+    try:
+        result = subprocess.run(
+            ["ffmpeg", "-i", "pipe:0", "-b:a", "64k", 
+             "-f", "mp3", "pipe:1", "-loglevel", "quiet"],
+            input=input_bytes, capture_output=True, timeout=30
+        )
+        if result.returncode == 0 and result.stdout:
+            return result.stdout
+    except Exception:
+        pass
+    return input_bytes  # fall back to uncompressed
 
 
 def _r2_object_key(poi_source_id: str, language: str, voice_name: str) -> str:
@@ -92,6 +108,9 @@ async def save_audio(
     backend was used.
     """
     settings = get_settings()
+    
+    # Compress audio before saving
+    audio_bytes = _compress_audio(audio_bytes)
 
     if settings.r2_configured:
         key = _r2_object_key(poi_source_id, language, voice_name)
@@ -142,7 +161,7 @@ async def read_audio_bytes(asset: AudioAsset) -> bytes:
     Raises FileNotFoundError / RuntimeError on failure.
     """
     if asset.file_path.startswith(_R2_PREFIX):
-        key = asset.file_path[len(_R2_PREFIX):]
+        key = asset.file_path[len(_R2_PREFIX) :]
         settings = get_settings()
         try:
             r2 = _get_r2_client()

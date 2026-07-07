@@ -45,6 +45,7 @@ _geosearch_cache: dict[tuple, list[RawPoi]] = {}
 
 _wiki_semaphore = asyncio.Semaphore(5)
 
+
 def _cache_key(lat: float, lng: float, radius_m: int, limit: int) -> tuple:
     """Create a cache key by rounding coordinates to ~1km precision."""
     return (round(lat, 3), round(lng, 3), radius_m, limit)
@@ -143,13 +144,13 @@ async def geosearch(
         client, params, log_context=f"geosearch near ({lat}, {lng})"
     )
     results = _parse_geosearch_response(response, lat, lng)
-    
+
     # Cache the results
     if len(_geosearch_cache) >= _GEOSEARCH_CACHE_SIZE:
         # Simple eviction: remove oldest entry (first key)
         _geosearch_cache.pop(next(iter(_geosearch_cache)))
     _geosearch_cache[key] = results
-    
+
     return results
 
 
@@ -163,7 +164,9 @@ async def get_summary(client: httpx.AsyncClient, title: str) -> str:
         "format": "json",
     }
     async with _wiki_semaphore:
-        response = await _request_with_retries(client, params, log_context=f"get_summary for '{title}'")
+        response = await _request_with_retries(
+            client, params, log_context=f"get_summary for '{title}'"
+        )
     return _parse_summary_response(response, title)
 
 

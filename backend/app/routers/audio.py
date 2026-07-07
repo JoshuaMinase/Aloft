@@ -8,12 +8,14 @@ from fastapi.responses import Response
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.core.dependencies import (
+    audio_synthesis_rate_limit,
     get_current_user,
     get_database,
     get_http_client,
-    audio_synthesis_rate_limit,
     mixed_audio_rate_limit,
+    require_permission,
 )
+from app.models.role import Permission
 from app.models.user import User
 from app.services.audio_mixing import AudioMixingError, mix_narration_with_music
 from app.services.audio_repository import get_audio, read_audio_bytes, save_audio
@@ -34,7 +36,7 @@ router = APIRouter(prefix="/v1/pois", tags=["audio"])
             "description": "No story found for this POI — generate it first via POST /pois/{source_id}/story"
         },
     },
-    dependencies=[Depends(audio_synthesis_rate_limit())],
+    dependencies=[Depends(audio_synthesis_rate_limit()), Depends(require_permission(Permission.CREATE_AUDIO))],
 )
 async def create_audio(
     source_id: str,
@@ -83,7 +85,6 @@ async def create_audio(
     return Response(content=await read_audio_bytes(asset), media_type="audio/mpeg")
 
 
-
 @router.post(
     "/{source_id}/audio/mixed",
     summary="Synthesise narration audio mixed with background music",
@@ -93,7 +94,7 @@ async def create_audio(
         404: {"description": "No story or audio found for this POI, or music track not found"},
         422: {"description": "Audio mixing failed (corrupt audio or music file)"},
     },
-    dependencies=[Depends(mixed_audio_rate_limit())],
+    dependencies=[Depends(mixed_audio_rate_limit()), Depends(require_permission(Permission.CREATE_AUDIO))],
 )
 async def create_mixed_audio(
     source_id: str,

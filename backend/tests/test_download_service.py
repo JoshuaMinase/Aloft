@@ -40,7 +40,15 @@ async def db():
 
 @pytest.fixture(autouse=True)
 def fake_settings(tmp_path, monkeypatch):
-    s = type("S", (), {"audio_storage_dir": str(tmp_path), "elevenlabs_voice_id": "en-US-Wavenet-D", "r2_configured": False})()
+    s = type(
+        "S",
+        (),
+        {
+            "audio_storage_dir": str(tmp_path),
+            "elevenlabs_voice_id": "en-US-Wavenet-D",
+            "r2_configured": False,
+        },
+    )()
     monkeypatch.setattr("app.services.audio_repository.get_settings", lambda: s)
     monkeypatch.setattr("app.services.audio_service.get_settings", lambda: s)
 
@@ -172,7 +180,7 @@ async def test_download_returns_zip(test_client, db):
     await save_story(db, _story("wikipedia:1001"))
     await save_audio(db, "wikipedia:1001", "en", "en-US-Wavenet-D", b"fake mp3")
 
-    response = test_client.get(f"/routes/{bundle.route_key}/download?include_images=false")
+    response = test_client.get(f"/v1/routes/{bundle.route_key}/download?include_images=false")
 
     assert response.status_code == 200
     assert response.headers["content-type"] == "application/zip"

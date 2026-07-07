@@ -18,10 +18,12 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from pydantic import BaseModel, Field
 
 from app.core.dependencies import (
+    download_rate_limit,
     get_current_user,
     get_database,
-    download_rate_limit,
+    require_permission,
 )
+from app.models.role import Permission
 from app.models.user import User
 
 router = APIRouter(prefix="/v1/user", tags=["gdpr"])
@@ -53,15 +55,9 @@ class UserDataExport(BaseModel):
 class DataDeletionConfirmation(BaseModel):
     """Confirmation for data deletion request."""
 
-    require_confirmation: bool = Field(
-        default=True,
-        description="Must be true to confirm deletion"
-    )
+    require_confirmation: bool = Field(default=True, description="Must be true to confirm deletion")
     reason: str = Field(
-        ...,
-        min_length=10,
-        max_length=500,
-        description="Reason for data deletion request"
+        ..., min_length=10, max_length=500, description="Reason for data deletion request"
     )
 
 
@@ -133,26 +129,26 @@ async def get_user_sessions(db: AsyncIOMotorDatabase, user_id: str) -> list[dict
         "Implements GDPR Right of Access (Article 15). "
         "Includes user profile, generated content, and session history."
     ),
-    dependencies=[Depends(download_rate_limit())],
+    dependencies=[Depends(download_rate_limit()), Depends(require_permission(Permission.READ_USER))],
 )
 async def export_user_data(
     current_user: User = Depends(get_current_user),
     db: AsyncIOMotorDatabase = Depends(get_database),
 ) -> UserDataExport:
     """Export all user data for GDPR compliance.
-    
+
     This endpoint returns all personal data stored about the user,
     implementing the GDPR Right of Access (Article 15).
     """
     logger.info(f"Data export requested by user: {current_user.user_id}")
-    
+
     # Collect all user data
     pois = await get_user_pois(db, current_user.user_id)
     stories = await get_user_stories(db, current_user.user_id)
     audio_assets = await get_user_audio_assets(db, current_user.user_id)
     route_bundles = await get_user_route_bundles(db, current_user.user_id)
     sessions = await get_user_sessions(db, current_user.user_id)
-    
+
     return UserDataExport(
         user_id=current_user.user_id,
         email=current_user.email,
@@ -187,24 +183,24 @@ async def request_data_export(
     db: AsyncIOMotorDatabase = Depends(get_database),
 ) -> dict[str, str]:
     """Request an asynchronous data export.
-    
+
     For users with large datasets, this endpoint initiates an async
     export process and returns a download link when ready.
     """
     logger.info(f"Async data export requested by user: {current_user.user_id}")
-    
+
     # In a real implementation, this would:
     # 1. Create an export job in a queue
     # 2. Process the export asynchronously
     # 3. Store the result in secure storage
     # 4. Return a download link with expiration
-    
+
     # For now, return a placeholder response
     return {
         "status": "processing",
         "export_id": f"export_{current_user.user_id}_{int(datetime.now(UTC).timestamp())}",
         "message": "Export will be processed asynchronously. You will receive an email when ready.",
-        "estimated_completion": "5-10 minutes"
+        "estimated_completion": "5-10 minutes",
     }
 
 
@@ -224,21 +220,20 @@ async def delete_user_data(
     db: AsyncIOMotorDatabase = Depends(get_database),
 ) -> DataDeletionResponse:
     """Delete all user data for GDPR compliance.
-    
+
     This endpoint permanently deletes all personal data associated with
     the user account, implementing the GDPR Right to Erasure (Article 17).
     """
     if not confirmation.require_confirmation:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Explicit confirmation required for data deletion"
+            detail="Explicit confirmation required for data deletion",
         )
-    
+
     logger.warning(
-        f"Data deletion requested by user: {current_user.user_id}, "
-        f"reason: {confirmation.reason}"
+        f"Data deletion requested by user: {current_user.user_id}, reason: {confirmation.reason}"
     )
-    
+
     # In a real implementation, this would:
     # 1. Delete user account
     # 2. Delete all user-generated content
@@ -246,7 +241,7 @@ async def delete_user_data(
     # 4. Anonymize any shared data (POIs, etc.)
     # 5. Log the deletion for audit purposes
     # 6. Send confirmation email
-    
+
     deletion_scheduled = datetime.now(UTC)
     data_categories = [
         "user_profile",
@@ -254,9 +249,9 @@ async def delete_user_data(
         "audio_assets",
         "route_bundles",
         "sessions",
-        "authentication_tokens"
+        "authentication_tokens",
     ]
-    
+
     # For now, return a placeholder response
     # In production, implement actual deletion logic
     return DataDeletionResponse(
@@ -265,7 +260,7 @@ async def delete_user_data(
         deletion_requested=True,
         deletion_scheduled=deletion_scheduled,
         data_categories_deleted=data_categories,
-        cancellation_link=f"/v1/user/data/cancel/{current_user.user_id}"
+        cancellation_link=f"/v1/user/data/cancel/{current_user.user_id}",
     )
 
 
@@ -279,15 +274,15 @@ async def cancel_data_deletion(
 ) -> dict[str, str]:
     """Cancel a pending data deletion request."""
     logger.info(f"Data deletion cancellation requested by user: {current_user.user_id}")
-    
+
     # In a real implementation, this would:
     # 1. Check if deletion is still pending
     # 2. Cancel the deletion job
     # 3. Send confirmation email
-    
+
     return {
         "status": "cancelled",
-        "message": "Data deletion has been cancelled. Your account and data remain intact."
+        "message": "Data deletion has been cancelled. Your account and data remain intact.",
     }
 
 
@@ -305,5 +300,5 @@ async def get_data_status(
         "export_status": "none",
         "deletion_status": "none",
         "last_export_at": None,
-        "last_deletion_requested_at": None
+        "last_deletion_requested_at": None,
     }

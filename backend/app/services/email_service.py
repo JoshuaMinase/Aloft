@@ -13,7 +13,6 @@ Configuration:
 from __future__ import annotations
 
 import logging
-from typing import Any
 
 import httpx
 
@@ -24,6 +23,53 @@ logger = logging.getLogger("aloft.email")
 
 class EmailError(Exception):
     """Raised when email sending fails."""
+
+
+async def send_email(
+    to_email: str,
+    subject: str,
+    html_content: str,
+) -> None:
+    """Send an email via Resend or SendGrid.
+
+    Args:
+        to_email: Recipient email address
+        subject: Email subject line
+        html_content: HTML body content
+
+    Raises:
+        EmailError: If email sending fails
+    """
+    settings = get_settings()
+    resend_key = settings.resend_api_key
+    sendgrid_key = settings.sendgrid_api_key
+    from_email = settings.from_email
+
+    if not resend_key and not sendgrid_key:
+        raise EmailError(
+            "No email service configured. Set RESEND_API_KEY or SENDGRID_API_KEY in environment variables."
+        )
+
+    resend_api_key = resend_key.get_secret_value() if resend_key else None
+    sendgrid_api_key = sendgrid_key.get_secret_value() if sendgrid_key else None
+
+    if resend_api_key:
+        try:
+            await _send_via_resend(to_email, from_email, subject, html_content, resend_api_key)
+            logger.info(f"Email sent via Resend to {to_email}")
+            return
+        except Exception as exc:
+            logger.warning(f"Resend email failed, trying SendGrid: {exc}")
+
+    if sendgrid_api_key:
+        try:
+            await _send_via_sendgrid(to_email, from_email, subject, html_content, sendgrid_api_key)
+            logger.info(f"Email sent via SendGrid to {to_email}")
+            return
+        except Exception as exc:
+            logger.warning(f"SendGrid email failed: {exc}")
+
+    raise EmailError("All email providers failed")
 
 
 async def send_password_reset_email(email: str, reset_token: str, base_url: str) -> None:
@@ -38,10 +84,13 @@ async def send_password_reset_email(email: str, reset_token: str, base_url: str)
         EmailError: If email sending fails
     """
     settings = get_settings()
-    
+    resend_key = settings.resend_api_key
+    sendgrid_key = settings.sendgrid_api_key
+    from_email = settings.from_email
+
     # Construct the reset link (frontend should handle the reset flow)
     reset_link = f"{base_url}/reset-password?token={reset_token}"
-    
+
     # Email content
     subject = "Reset your Aloft password"
     html_content = f"""
@@ -57,33 +106,26 @@ async def send_password_reset_email(email: str, reset_token: str, base_url: str)
         </body>
     </html>
     """
-    
-    # Try Resend first, then SendGrid as fallback
-    resend_key = getattr(settings, "resend_api_key", None)
-    sendgrid_key = getattr(settings, "sendgrid_api_key", None)
-    from_email = getattr(settings, "from_email", "noreply@aloft.app")
-    
-    if resend_key:
+
+    resend_api_key = resend_key.get_secret_value() if resend_key else None
+    sendgrid_api_key = sendgrid_key.get_secret_value() if sendgrid_key else None
+
+    if resend_api_key:
         try:
-            await _send_via_resend(email, from_email, subject, html_content, resend_key)
+            await _send_via_resend(email, from_email, subject, html_content, resend_api_key)
             logger.info(f"Password reset email sent via Resend to {email}")
             return
         except Exception as exc:
             logger.warning(f"Resend email failed, trying SendGrid: {exc}")
-    
-    if sendgrid_key:
+
+    if sendgrid_api_key:
         try:
-            await _send_via_sendgrid(email, from_email, subject, html_content, sendgrid_key)
+            await _send_via_sendgrid(email, from_email, subject, html_content, sendgrid_api_key)
             logger.info(f"Password reset email sent via SendGrid to {email}")
             return
         except Exception as exc:
             logger.warning(f"SendGrid email failed: {exc}")
-    
-    # If no email service is configured, log the reset link for development
-    logger.warning(
-        "No email service configured. In production, set RESEND_API_KEY or SENDGRID_API_KEY. "
-        f"Reset link for {email}: {reset_link}"
-    )
+
     raise EmailError(
         "Email service not configured. Please set RESEND_API_KEY or SENDGRID_API_KEY in environment variables."
     )
@@ -112,7 +154,7 @@ async def _send_via_resend(
             },
             timeout=10.0,
         )
-        
+
         if response.status_code != 200:
             error_detail = response.text
             raise EmailError(f"Resend API error: {response.status_code} - {error_detail}")
@@ -150,7 +192,7 @@ async def _send_via_sendgrid(
             },
             timeout=10.0,
         )
-        
+
         if response.status_code not in (200, 202):
             error_detail = response.text
             raise EmailError(f"SendGrid API error: {response.status_code} - {error_detail}")

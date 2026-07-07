@@ -119,6 +119,7 @@ async def test_save_poi_images_accepts_empty_list_as_honest_result(db):
 # _source_and_id_from_raw: boundary tests for synthetic ID ranges
 # ---------------------------------------------------------------------------
 
+
 def _raw(page_id: int) -> RawPoi:
     return RawPoi(title="Test", page_id=page_id, lat=0.0, lng=0.0, distance_m=0.0)
 

@@ -45,8 +45,22 @@ def _deserialize(raw: str) -> FlightSession:
     return FlightSession.model_validate_json(raw)
 
 
-async def create_session(redis: Redis, route_key: str) -> FlightSession:
-    session = FlightSession(session_id=str(uuid.uuid4()), route_key=route_key)
+async def create_session(
+    redis: Redis,
+    route_key: str,
+    owner_id: str = "",
+    arrival_country: str | None = None,
+    arrival_city: str | None = None,
+    destination_tour_narrations: list[str] | None = None,
+) -> FlightSession:
+    session = FlightSession(
+        session_id=str(uuid.uuid4()),
+        route_key=route_key,
+        owner_id=owner_id,
+        arrival_country=arrival_country,
+        arrival_city=arrival_city,
+        destination_tour_narrations=destination_tour_narrations or [],
+    )
     ttl = get_settings().session_ttl_seconds
     await redis.set(_key(session.session_id), _serialize(session), ex=ttl)
     return session
@@ -131,6 +145,59 @@ async def record_upcoming_narration(
 
     if poi_source_id not in session.upcoming_poi_triggered_source_ids:
         session.upcoming_poi_triggered_source_ids.append(poi_source_id)
+
+    ttl = get_settings().session_ttl_seconds
+    await redis.set(key, _serialize(session), ex=ttl)
+
+
+async def record_destination_tour_narration(
+    redis: Redis,
+    session_id: str,
+    lat: float,
+    lng: float,
+    narration_index: int,
+) -> None:
+    """Record that a destination tour narration fired.
+
+    Updates the destination tour index and last position.
+    This is called when a destination tour highlight is played.
+    """
+    key = _key(session_id)
+    raw = await redis.get(key)
+    if raw is None:
+        return  # session expired or never existed -- nothing to update
+
+    session = _deserialize(raw)
+    session.destination_tour_index = narration_index
+    session.last_destination_tour_at = datetime.now(UTC)
+    session.last_position = (lat, lng)
+    session.last_updated_at = datetime.now(UTC)
+
+    ttl = get_settings().session_ttl_seconds
+    await redis.set(key, _serialize(session), ex=ttl)
+
+
+async def update_session_destination_tour(
+    redis: Redis,
+    session_id: str,
+    tour_narrations: list[str],
+) -> None:
+    """Patch the destination_tour_narrations on an existing session.
+
+    Called from the background task in start_session once prepare_destination_tour
+    finishes — avoids importing private helpers (_key, _serialize, _deserialize)
+    from the repository module directly.
+
+    No-op if the session has already expired.
+    """
+    key = _key(session_id)
+    raw = await redis.get(key)
+    if raw is None:
+        return  # session expired while tour was being prepared — nothing to do
+
+    session = _deserialize(raw)
+    session.destination_tour_narrations = tour_narrations
+    session.last_updated_at = datetime.now(UTC)
 
     ttl = get_settings().session_ttl_seconds
     await redis.set(key, _serialize(session), ex=ttl)

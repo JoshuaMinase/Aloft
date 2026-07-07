@@ -24,6 +24,9 @@ class FlightInfo(BaseModel):
     arrival_iata: str
     flight_status: str
     callsign: str | None = None
+    departure_scheduled: str | None = None
+    arrival_scheduled: str | None = None
+    airline_name: str | None = None
 
 
 class AirportInfo(BaseModel):
@@ -64,12 +67,19 @@ async def get_flight(client: httpx.AsyncClient, flight_iata: str) -> FlightInfo:
         if airline_icao:
             callsign = f"{airline_icao.strip()}{flight_iata[:3]}".upper()
 
+    departure_scheduled = (flight.get("departure") or {}).get("scheduled")
+    arrival_scheduled = (flight.get("arrival") or {}).get("scheduled")
+    airline_name = (flight.get("airline") or {}).get("name")
+
     return FlightInfo(
         flight_iata=flight_iata,
         departure_iata=departure_iata,
         arrival_iata=arrival_iata,
         flight_status=flight.get("flight_status") or "unknown",
         callsign=callsign,
+        departure_scheduled=departure_scheduled,
+        arrival_scheduled=arrival_scheduled,
+        airline_name=airline_name,
     )
 
 
@@ -89,6 +99,59 @@ async def get_airport(client: httpx.AsyncClient, iata_code: str) -> AirportInfo:
         lat=float(lat),
         lng=float(lng),
     )
+
+
+async def get_flights_by_airport(
+    client: httpx.AsyncClient,
+    dep_iata: str,
+    limit: int = 20,
+) -> list[FlightInfo]:
+    """Get flights departing from a specific airport.
+
+    Args:
+        client: HTTP client
+        dep_iata: Departure airport IATA code
+        limit: Maximum number of flights to return
+
+    Returns:
+        List of FlightInfo objects
+    """
+    results = await _request(client, "flights", {"dep_iata": dep_iata, "limit": limit})
+    
+    flights = []
+    for flight in results:
+        departure_iata = (flight.get("departure") or {}).get("iata")
+        arrival_iata = (flight.get("arrival") or {}).get("iata")
+        if not departure_iata or not arrival_iata:
+            continue
+
+        callsign = None
+        flight_icao = flight.get("flight_icao") or flight.get("icao")
+        if flight_icao:
+            callsign = flight_icao.strip()
+        else:
+            airline_data = flight.get("airline") or {}
+            airline_icao = airline_data.get("icao")
+            if airline_icao:
+                flight_iata = flight.get("flight_iata", "")
+                callsign = f"{airline_icao.strip()}{flight_iata[:3]}".upper()
+
+        departure_scheduled = (flight.get("departure") or {}).get("scheduled")
+        arrival_scheduled = (flight.get("arrival") or {}).get("scheduled")
+        airline_name = (flight.get("airline") or {}).get("name")
+
+        flights.append(FlightInfo(
+            flight_iata=flight.get("flight_iata", ""),
+            departure_iata=departure_iata,
+            arrival_iata=arrival_iata,
+            flight_status=flight.get("flight_status") or "unknown",
+            callsign=callsign,
+            departure_scheduled=departure_scheduled,
+            arrival_scheduled=arrival_scheduled,
+            airline_name=airline_name,
+        ))
+
+    return flights
 
 
 async def _request(client: httpx.AsyncClient, endpoint: str, params: dict) -> list[dict]:

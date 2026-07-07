@@ -72,7 +72,9 @@ async def create_content_job(
     # Push to the queue
     await redis_client.lpush("queue:content", job_id)
 
-    logger.info("Created content job %s for route %s (%d POIs)", job_id, route_key, len(poi_source_ids))
+    logger.info(
+        "Created content job %s for route %s (%d POIs)", job_id, route_key, len(poi_source_ids)
+    )
     return job_id
 
 

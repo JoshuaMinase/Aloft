@@ -10,8 +10,8 @@ from pydantic import BaseModel
 
 from app.clients.aviationstack import (
     AviationStackClientError,
-    FlightNotFoundError,
     FlightInfo,
+    FlightNotFoundError,
     get_flight,
 )
 from app.clients.opensky import (
@@ -24,11 +24,11 @@ from app.models.poi import Poi
 from app.services.corridor import distance_km
 from app.services.flight_resolution import resolve_flight_route
 from app.services.flight_session_repository import create_session
+from app.services.poi_curator import curate_pois
 from app.services.poi_repository import get_pois_by_source_ids, save_pois
 from app.services.poi_service import find_pois_along_corridor
 from app.services.position_tracking_service import (
     DEFAULT_TRIGGER_RADIUS_KM,
-    find_all_nearby_pois,
 )
 from app.services.route_bundle_repository import save_route_bundle
 from app.services.story_repository import get_stories_batch, save_story
@@ -94,7 +94,12 @@ async def prepare_live_flight_tracking(
         client, departure=departure, arrival=arrival, width_km=width_km
     )
     inserted, poi_source_ids = await save_pois(db, corridor_pois)
-    bundle = await save_route_bundle(db, departure, arrival, poi_source_ids)
+
+    # Curate POIs to keep only the best ones (quality over quantity)
+    curated_pois = curate_pois(corridor_pois, departure, arrival)
+    curated_source_ids = [f"wikipedia:{p.page_id}" for p in curated_pois]
+
+    bundle = await save_route_bundle(db, departure, arrival, curated_source_ids)
     session = await create_session(redis, bundle.route_key)
 
     aircraft = None
@@ -104,18 +109,13 @@ async def prepare_live_flight_tracking(
         aircraft = await _fetch_live_position(client, flight_info)
         position_source = "opensky"
     except (AircraftNotFoundError, OpenSkyClientError) as exc:
-        logger.info(
-            "Live position unavailable for %s: %s", flight_info.flight_iata, exc
-        )
+        logger.info("Live position unavailable for %s: %s", flight_info.flight_iata, exc)
 
     route_pois = await get_pois_by_source_ids(db, bundle.poi_source_ids)
     cached_stories = await get_stories_batch(db, poi_source_ids, language)
     story_map = {s.poi_source_id: s.text_content for s in cached_stories}
 
-    missing_source_ids = [
-        poi.source_id for poi in route_pois
-        if poi.source_id not in story_map
-    ]
+    missing_source_ids = [poi.source_id for poi in route_pois if poi.source_id not in story_map]
 
     if missing_source_ids and generate_missing_stories:
         max_concurrent = get_settings().content_generation_max_concurrent
@@ -128,14 +128,10 @@ async def prepare_live_flight_tracking(
                     await save_story(db, story)
                     return story.text_content
                 except InsufficientFactsError as exc:
-                    logger.warning(
-                        "Skipping story for %s: %s", poi.source_id, exc
-                    )
+                    logger.warning("Skipping story for %s: %s", poi.source_id, exc)
                     return None
                 except Exception as exc:
-                    logger.warning(
-                        "Story generation failed for %s: %s", poi.source_id, exc
-                    )
+                    logger.warning("Story generation failed for %s: %s", poi.source_id, exc)
                     return None
 
         results = await asyncio.gather(
@@ -143,7 +139,7 @@ async def prepare_live_flight_tracking(
             return_exceptions=True,
         )
         for poi, result in zip(
-            [p for p in route_pois if p.source_id in missing_source_ids], results
+            [p for p in route_pois if p.source_id in missing_source_ids], results, strict=False
         ):
             if isinstance(result, Exception):
                 continue
@@ -158,19 +154,16 @@ async def prepare_live_flight_tracking(
         trigger_radius_km=trigger_radius_km,
     )
 
-    nearby = [
-        p for p in all_poi_details if p["in_range"]
+    nearby = [p for p in all_poi_details if p["in_range"]]
+    upcoming = [p for p in all_poi_details if not p["in_range"] and p["distance_km"] is not None][
+        :max_upcoming_pois
     ]
-    upcoming = [
-        p for p in all_poi_details
-        if not p["in_range"] and p["distance_km"] is not None
-    ][:max_upcoming_pois]
 
     target_pois = upcoming if generate_missing_stories else []
     missing_in_target = [
-        poi.source_id for poi in route_pois
-        if poi.source_id in {p["source_id"] for p in target_pois}
-        and poi.source_id not in story_map
+        poi.source_id
+        for poi in route_pois
+        if poi.source_id in {p["source_id"] for p in target_pois} and poi.source_id not in story_map
     ]
 
     if missing_in_target and generate_missing_stories:
@@ -196,7 +189,7 @@ async def prepare_live_flight_tracking(
         )
         generated_ids = set()
         for poi, result in zip(
-            [p for p in route_pois if p.source_id in missing_in_target], results
+            [p for p in route_pois if p.source_id in missing_in_target], results, strict=False
         ):
             if isinstance(result, Exception):
                 continue
@@ -213,13 +206,22 @@ async def prepare_live_flight_tracking(
             generated_ids=generated_ids,
         )
         nearby = [p for p in all_poi_details if p["in_range"]]
-        upcoming = [p for p in all_poi_details if not p["in_range"] and p["distance_km"] is not None][:max_upcoming_pois]
+        upcoming = [
+            p for p in all_poi_details if not p["in_range"] and p["distance_km"] is not None
+        ][:max_upcoming_pois]
 
     aircraft_payload = None
     if aircraft is not None:
         aircraft_payload = aircraft.model_dump(mode="json")
-        for k in ("latitude", "longitude", "baro_altitude_m", "velocity_ms",
-                  "true_track_deg", "vertical_rate_ms", "on_ground"):
+        for k in (
+            "latitude",
+            "longitude",
+            "baro_altitude_m",
+            "velocity_ms",
+            "true_track_deg",
+            "vertical_rate_ms",
+            "on_ground",
+        ):
             if aircraft_payload.get(k) is None:
                 aircraft_payload.pop(k, None)
 
@@ -270,22 +272,22 @@ def _build_all_poi_details(
         dist = distance_km(current_lat, current_lng, poi_lat, poi_lng)
         in_range = dist <= trigger_radius_km
         text = story_map.get(poi.source_id)
-        if generated_ids and poi.source_id in generated_ids:
-            status = "ready"
-        elif text is not None:
+        if generated_ids and poi.source_id in generated_ids or text is not None:
             status = "ready"
         elif in_range:
             status = "pending"
         else:
             status = "ready"
-        details.append({
-            "source_id": poi.source_id,
-            "name": poi.name,
-            "distance_km": round(dist, 2),
-            "in_range": in_range,
-            "story": text,
-            "story_available": text is not None,
-            "generation_status": status,
-        })
+        details.append(
+            {
+                "source_id": poi.source_id,
+                "name": poi.name,
+                "distance_km": round(dist, 2),
+                "in_range": in_range,
+                "story": text,
+                "story_available": text is not None,
+                "generation_status": status,
+            }
+        )
     details.sort(key=lambda p: p["distance_km"])
     return details

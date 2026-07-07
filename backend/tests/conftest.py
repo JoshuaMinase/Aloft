@@ -29,6 +29,7 @@ import pytest
 
 from app.core.dependencies import get_current_user
 from app.main import app
+from app.models.role import Role
 from app.models.user import User
 
 _FAKE_USER = User(
@@ -36,6 +37,8 @@ _FAKE_USER = User(
     email="testuser@example.com",
     hashed_password="$2b$12$fakehashfortesting",
     is_active=True,
+    is_verified=True,
+    role=Role.USER,
 )
 
 

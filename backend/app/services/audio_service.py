@@ -72,7 +72,14 @@ async def synthesize_story_audio(
             (see _LANGUAGE_VOICE_DEFAULTS). Has no effect if voice_id
             is supplied directly.
         voice_id: Explicit voice ID override -- skips language lookup.
-        http_client: Injected httpx client (used in tests).
+        http_client: Shared httpx client from app.state.http_client.
+            If not provided a temporary client is created for this call
+            (acceptable in tests; production callers should always inject
+            the shared client to benefit from connection pooling).
     """
     resolved_voice_id = voice_id or get_voice_id_for_language(language)
-    return await synthesize_speech(text, voice_id=resolved_voice_id, http_client=http_client)
+    if http_client is not None:
+        return await synthesize_speech(text, voice_id=resolved_voice_id, http_client=http_client)
+    # Fallback: create a one-shot client (tests / ad-hoc callers only).
+    async with httpx.AsyncClient() as tmp_client:
+        return await synthesize_speech(text, voice_id=resolved_voice_id, http_client=tmp_client)

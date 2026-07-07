@@ -41,7 +41,7 @@ async def synthesize_speech(
     text: str,
     *,
     voice_id: str | None = None,
-    http_client: httpx.AsyncClient | None = None,
+    http_client: httpx.AsyncClient,
 ) -> bytes:
     """Convert text to MP3 audio bytes using ElevenLabs.
 
@@ -49,8 +49,9 @@ async def synthesize_speech(
         text: the text to narrate.
         voice_id: ElevenLabs voice ID. Defaults to settings.elevenlabs_voice_id.
             Find voice IDs at elevenlabs.io/voice-lab or via GET /v1/voices.
-        http_client: optional injected httpx client (used in tests).
-            If not provided, a short-lived client is created for this call.
+        http_client: shared httpx client from ``app.state.http_client``.
+            Callers **must** provide this — creating a new client per call
+            would bypass connection pooling and leak sockets.
 
     Returns:
         Raw MP3 audio bytes.
@@ -78,42 +79,36 @@ async def synthesize_speech(
         "output_format": "mp3_44100_128",
     }
 
-    should_close = http_client is None
-    client = http_client or httpx.AsyncClient()
     last_error: Exception | None = None
 
-    try:
-        for attempt in range(1, _MAX_ATTEMPTS + 1):
-            try:
-                response = await client.post(url, headers=headers, json=payload, timeout=30.0)
-            except httpx.RequestError as exc:
-                last_error = exc
-                logger.warning("TTS request error, attempt %d/%d: %s", attempt, _MAX_ATTEMPTS, exc)
+    for attempt in range(1, _MAX_ATTEMPTS + 1):
+        try:
+            response = await http_client.post(url, headers=headers, json=payload, timeout=30.0)
+        except httpx.RequestError as exc:
+            last_error = exc
+            logger.warning("TTS request error, attempt %d/%d: %s", attempt, _MAX_ATTEMPTS, exc)
+        else:
+            if response.status_code == 200:
+                return response.content
+
+            if response.status_code in _RETRYABLE_STATUS_CODES:
+                last_error = TtsClientError(
+                    f"ElevenLabs returned {response.status_code}: {response.text}"
+                )
+                logger.warning(
+                    "TTS retryable error %d, attempt %d/%d",
+                    response.status_code,
+                    attempt,
+                    _MAX_ATTEMPTS,
+                )
             else:
-                if response.status_code == 200:
-                    return response.content
+                # 401, 422, etc. -- won't succeed on retry
+                raise TtsClientError(
+                    f"TTS synthesis failed (non-retryable): "
+                    f"HTTP {response.status_code}: {response.text}"
+                )
 
-                if response.status_code in _RETRYABLE_STATUS_CODES:
-                    last_error = TtsClientError(
-                        f"ElevenLabs returned {response.status_code}: {response.text}"
-                    )
-                    logger.warning(
-                        "TTS retryable error %d, attempt %d/%d",
-                        response.status_code,
-                        attempt,
-                        _MAX_ATTEMPTS,
-                    )
-                else:
-                    # 401, 422, etc. -- won't succeed on retry
-                    raise TtsClientError(
-                        f"TTS synthesis failed (non-retryable): "
-                        f"HTTP {response.status_code}: {response.text}"
-                    )
-
-            if attempt < _MAX_ATTEMPTS:
-                await asyncio.sleep(_BACKOFF_BASE_SECONDS * (2 ** (attempt - 1)))
-    finally:
-        if should_close:
-            await client.aclose()
+        if attempt < _MAX_ATTEMPTS:
+            await asyncio.sleep(_BACKOFF_BASE_SECONDS * (2 ** (attempt - 1)))
 
     raise TtsClientError(f"TTS synthesis failed after {_MAX_ATTEMPTS} attempts") from last_error

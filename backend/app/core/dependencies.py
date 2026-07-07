@@ -49,6 +49,7 @@ from app.core.config import get_settings
 from app.core.db import get_db
 from app.core.redis import get_redis as _get_session_redis
 from app.core.redis_client import get_redis as _get_rate_limit_redis
+from app.models.role import Permission, has_permission
 from app.models.user import User
 from app.services.auth_service import AuthError, decode_access_token
 from app.services.rate_limiter import RateLimitExceeded, check_rate_limit
@@ -130,6 +131,37 @@ async def get_current_user(
         )
 
     return user
+
+
+def require_permission(permission: Permission):
+    """FastAPI dependency that enforces RBAC on a route.
+
+    Checks that the authenticated user's role grants the specified permission.
+    Raises HTTP 403 Forbidden if the role does not have the permission.
+
+    Usage in a router endpoint:
+        @router.post("/admin/something",
+                     dependencies=[Depends(require_permission(Permission.MANAGE_ROLES))])
+        async def admin_endpoint(): ...
+
+    Or as a named parameter for access to the user inside the handler:
+        async def my_endpoint(
+            current_user: User = Depends(get_current_user),
+            _: None = Depends(require_permission(Permission.DELETE_CONTENT)),
+        ): ...
+    """
+
+    async def dependency(current_user: User = Depends(get_current_user)) -> None:
+        if not has_permission(current_user.role, permission):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=(
+                    f"Permission denied. Required permission: '{permission.value}'. "
+                    f"Your role '{current_user.role.value}' does not have this permission."
+                ),
+            )
+
+    return dependency
 
 
 def rate_limit(name: str, max_requests: int, window_seconds: int, use_user_id: bool = False):

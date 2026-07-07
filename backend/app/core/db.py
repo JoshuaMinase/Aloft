@@ -43,8 +43,6 @@ async def connect_to_mongo() -> None:
         logger.error("MongoDB index creation failed: %s", exc)
         raise
 
-    logger.info("Connected to MongoDB database '%s'", settings.mongodb_db_name)
-
 
 async def close_mongo_connection() -> None:
     global _client, _db
@@ -55,19 +53,50 @@ async def close_mongo_connection() -> None:
 
 
 async def ensure_indexes(db: AsyncIOMotorDatabase) -> None:
-    index_defs = [
+    index_defs: list[tuple] = [
         (db.pois, [("location", "2dsphere")], "pois_location_2dsphere"),
-        (db.pois, ["source_id"], "pois_source_id_unique", {"unique": True, "sparse": True}),
-        (db.stories, [("poi_source_id", 1), ("language", 1)], "stories_poi_lang_unique", {"unique": True}),
-        (db.airports, ["iata_code"], "airports_iata_unique", {"unique": True}),
-        (db.route_bundles, ["route_key"], "route_bundles_route_key_unique", {"unique": True}),
-        (db.users, ["email"], "users_email_unique", {"unique": True}),
-        (db.audio_assets, [("poi_source_id", 1), ("language", 1), ("voice_name", 1)], "audio_assets_poi_lang_voice_unique", {"unique": True}),
+        (db.pois, [("source_id", 1)], "pois_source_id_unique", {"unique": True, "sparse": True}),
+        (
+            db.stories,
+            [("poi_source_id", 1), ("language", 1)],
+            "stories_poi_lang_unique",
+            {"unique": True},
+        ),
+        (db.airports, [("iata_code", 1)], "airports_iata_unique", {"unique": True}),
+        (db.route_bundles, [("route_key", 1)], "route_bundles_route_key_unique", {"unique": True}),
+        (db.users, [("email", 1)], "users_email_unique", {"unique": True}),
+        (
+            db.audio_assets,
+            [("poi_source_id", 1), ("language", 1), ("voice_name", 1)],
+            "audio_assets_poi_lang_voice_unique",
+            {"unique": True},
+        ),
+        # Flight journal and user stats indexes
+        (db.flight_journal, [("user_id", 1), ("flight_date", -1)], "flight_journal_user_date"),
+        (db.user_stats, [("user_id", 1)], "user_stats_user_id_unique", {"unique": True}),
+        # Favorites indexes
+        (db.favorites, [("user_id", 1), ("saved_at", -1)], "favorites_user_saved_at"),
+        (db.favorites, [("user_id", 1), ("poi_source_id", 1)], "favorites_user_poi_unique", {"unique": True}),
+        # Upcoming flights indexes
+        (db.upcoming_flights, [("user_id", 1), ("departure_time", 1)], "upcoming_flights_user_departure"),
+        (db.upcoming_flights, [("departure_time", 1), ("notification_sent", 1)], "upcoming_flights_departure_notification"),
     ]
+    failed_indexes: list[str] = []
     for collection, keys, name, *rest in index_defs:
         try:
             kwargs = rest[0] if rest else {}
             await collection.create_index(keys, name=name, **kwargs)
             logger.debug("Created index %s on %s", name, collection.name)
         except Exception as exc:
-            logger.warning("Index %s creation failed: %s", name, exc)
+            logger.error("Index %s creation failed on collection %s: %s", name, collection.name, exc)
+            failed_indexes.append(name)
+
+    if failed_indexes:
+        # Abort startup — missing indexes mean silent correctness bugs (duplicate
+        # users if users_email_unique is missing) or severe performance degradation.
+        raise RuntimeError(
+            f"FATAL: Failed to create required indexes: {', '.join(failed_indexes)}. "
+            "Check MongoDB permissions and existing data for conflicts."
+        )
+
+    logger.info("Connected to MongoDB database '%s'", db.name)

@@ -15,13 +15,11 @@ from __future__ import annotations
 
 import logging
 import secrets
-from typing import Any
 
 from redis.asyncio import Redis
 
-from app.core.redis_client import get_redis as _get_rate_limit_redis
-from app.clients.email_client import EmailError, send_email
 from app.core.config import get_settings
+from app.services.email_service import EmailError, send_email
 
 logger = logging.getLogger("aloft.verification")
 
@@ -107,7 +105,7 @@ async def send_verification_email(
     """Generate a verification token, store it, and send it via email.
 
     Args:
-        redis: Redis client
+        redis: Redis client (can be None in development/testing)
         user_id: The user ID to verify
         email: The user's email address
 
@@ -115,12 +113,26 @@ async def send_verification_email(
         The verification token (for testing purposes)
 
     Raises:
-        VerificationError: If Redis is not configured or email sending fails
+        VerificationError: If email sending fails (only in production)
     """
     token = generate_verification_token()
-    await store_verification_token(redis, user_id, token)
 
     settings = get_settings()
+
+    # Try to store the token if Redis is available
+    if redis is None:
+        if settings.environment.lower() == "production":
+            raise VerificationError(
+                "Redis is not configured. Email verification requires Redis. "
+                "Set REDIS_URL in your environment variables."
+            )
+        logger.warning(
+            f"Redis not available - verification token for {email}: "
+            f"{settings.frontend_base_url}/verify-email?token={token}"
+        )
+    else:
+        await store_verification_token(redis, user_id, token)
+
     verification_link = f"{settings.frontend_base_url}/verify-email?token={token}"
 
     # Email content
@@ -147,12 +159,11 @@ async def send_verification_email(
         logger.info(f"Verification email sent to {email}")
     except EmailError as exc:
         # Log the error but don't fail the request - the token is still valid
-        logger.error(f"Failed to send verification email to {email}: {exc}")
-        # In development, log the verification link so testing is possible
-        if settings.environment.lower() == "development":
-            logger.warning(
-                f"Email service not configured. Verification link for {email}: {verification_link}"
-            )
-        raise VerificationError(f"Failed to send verification email: {exc}") from exc
+        logger.warning(
+            f"Email service not configured. Verification link for {email}: {verification_link}"
+        )
+        if settings.environment.lower() == "production":
+            raise VerificationError(f"Failed to send verification email: {exc}") from exc
 
+    # Always return the token for development/testing purposes
     return token

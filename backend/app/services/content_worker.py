@@ -23,19 +23,19 @@ import redis.asyncio as redis
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.clients.groq import GroqClientError
+from app.clients.tts import TtsClientError
 from app.clients.wikipedia import WikipediaClientError, get_images
 from app.services.audio_repository import get_audio, save_audio
 from app.services.audio_service import get_voice_id_for_language, synthesize_story_audio
 from app.services.content_job_service import (
     INTER_IMAGE_DELAY_SECONDS,
     INTER_POI_DELAY_SECONDS,
-    RATE_LIMIT_BACKOFF_SECONDS,
     MAX_POI_RETRIES,
+    RATE_LIMIT_BACKOFF_SECONDS,
     JobStatus,
     get_job_status,
     update_job_progress,
 )
-from app.clients.tts import TtsClientError
 from app.services.poi_repository import get_poi, save_poi_images
 from app.services.story_repository import get_story, save_story
 from app.services.story_service import InsufficientFactsError, generate_story
@@ -48,8 +48,37 @@ async def run_worker(
     db: AsyncIOMotorDatabase,
     http_client: httpx.AsyncClient,
 ) -> None:
+    """Supervised worker loop. Restarts automatically on unexpected crashes.
+
+    An inner _worker_loop() does the real work. This outer function catches
+    any exception that leaks out of _worker_loop (which shouldn't happen —
+    _worker_loop guards everything internally) and restarts after a short
+    delay, so a freak bug never silently kills all content generation.
+    CancelledError is NOT caught here so the graceful shutdown path
+    (lifespan cancels the task) still works correctly.
+    """
+    logger.info("Content worker supervisor started")
+    while True:
+        try:
+            await _worker_loop(redis_client, db, http_client)
+        except asyncio.CancelledError:
+            # Propagate cancellation so lifespan shutdown works correctly.
+            logger.info("Content worker supervisor received cancellation — shutting down")
+            raise
+        except Exception:
+            logger.exception(
+                "Content worker loop exited unexpectedly — restarting in 10 seconds"
+            )
+            await asyncio.sleep(10)
+
+
+async def _worker_loop(
+    redis_client: redis.Redis,
+    db: AsyncIOMotorDatabase,
+    http_client: httpx.AsyncClient,
+) -> None:
     """Main worker loop. Runs forever, picks up jobs from the queue.
-    Called once from main.py lifespan as a background asyncio task.
+    Called by run_worker's supervisor loop.
     """
     logger.info("Content worker started")
     while True:
@@ -66,7 +95,7 @@ async def run_worker(
 
         except asyncio.CancelledError:
             logger.info("Content worker shutting down")
-            break
+            raise
         except Exception:
             logger.exception("Unexpected error in content worker, continuing")
             await asyncio.sleep(5)
@@ -93,8 +122,14 @@ async def _process_job(
 
     for source_id in poi_source_ids:
         success = await _process_one_poi_with_retry(
-            http_client, db, redis_client, job_id,
-            source_id, language, completed, failed,
+            http_client,
+            db,
+            redis_client,
+            job_id,
+            source_id,
+            language,
+            completed,
+            failed,
         )
         if success:
             completed += 1
@@ -123,7 +158,9 @@ async def _process_one_poi_with_retry(
     completed: int,
     failed: int,
 ) -> bool:
-    """Process one POI with up to MAX_POI_RETRIES retries on rate limits."""
+    """Process one POI with exponential backoff on rate limits and errors."""
+    backoff_base = RATE_LIMIT_BACKOFF_SECONDS
+
     for attempt in range(1, MAX_POI_RETRIES + 1):
         try:
             await _process_one_poi(http_client, db, source_id, language)
@@ -131,29 +168,49 @@ async def _process_one_poi_with_retry(
         except GroqClientError as exc:
             error_str = str(exc)
             if "429" in error_str or "rate" in error_str.lower():
+                backoff_time = backoff_base * (2 ** (attempt - 1))  # Exponential backoff
                 logger.warning(
-                    "Groq rate limit on %s attempt %d/%d -- backing off %ds",
-                    source_id, attempt, MAX_POI_RETRIES, RATE_LIMIT_BACKOFF_SECONDS,
+                    "Groq rate limit on %s attempt %d/%d -- backing off %.1fs",
+                    source_id,
+                    attempt,
+                    MAX_POI_RETRIES,
+                    backoff_time,
                 )
                 if attempt < MAX_POI_RETRIES:
-                    await asyncio.sleep(RATE_LIMIT_BACKOFF_SECONDS)
+                    await asyncio.sleep(backoff_time)
                     continue
             logger.warning("Groq error on %s (non-retryable): %s", source_id, exc)
             return False
         except WikipediaClientError as exc:
             error_str = str(exc)
             if "429" in error_str:
-                logger.warning("Wikipedia rate limit on %s -- backing off", source_id)
+                backoff_time = backoff_base * (2 ** (attempt - 1))
+                logger.warning(
+                    "Wikipedia rate limit on %s attempt %d/%d -- backing off %.1fs",
+                    source_id,
+                    attempt,
+                    MAX_POI_RETRIES,
+                    backoff_time,
+                )
                 if attempt < MAX_POI_RETRIES:
-                    await asyncio.sleep(30.0)
+                    await asyncio.sleep(backoff_time)
                     continue
             logger.warning("Wikipedia error on %s: %s", source_id, exc)
+            return False
+        except TtsClientError as exc:
+            logger.warning("TTS error on %s: %s -- story saved, no audio", source_id, exc)
             return False
         except InsufficientFactsError:
             # Not worth retrying -- no Wikipedia article means no article.
             return False
         except Exception as exc:
-            logger.warning("Unexpected error on %s: %s", source_id, exc)
+            logger.exception(
+                "Unexpected error on %s attempt %d/%d: %s", source_id, attempt, MAX_POI_RETRIES, exc
+            )
+            if attempt < MAX_POI_RETRIES:
+                backoff_time = backoff_base * (2 ** (attempt - 1))
+                await asyncio.sleep(backoff_time)
+                continue
             return False
     return False
 

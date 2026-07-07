@@ -14,7 +14,7 @@ import httpx
 import pytest
 import respx
 
-from app.clients.geocoding_client import RegionInfo, reverse_geocode, _parse_response
+from app.clients.geocoding_client import _parse_response, reverse_geocode
 
 _GEOCODING_API_URL = "https://api.bigdatacloud.net/data/reverse-geocode-client"
 
@@ -35,9 +35,7 @@ def test_parse_ocean_response():
         "countryName": "",
         "continent": "North America",
         "locality": "North Atlantic Ocean",
-        "localityInfo": {
-            "informative": [{"name": "North Atlantic Ocean"}]
-        },
+        "localityInfo": {"informative": [{"name": "North Atlantic Ocean"}]},
         "principalSubdivision": "",
     }
     result = _parse_response(data)
@@ -130,14 +128,10 @@ async def test_reverse_geocode_ocean_coordinates(http_client):
         "countryName": "",
         "continent": "North America",
         "locality": "North Atlantic Ocean",
-        "localityInfo": {
-            "informative": [{"name": "North Atlantic Ocean"}]
-        },
+        "localityInfo": {"informative": [{"name": "North Atlantic Ocean"}]},
         "principalSubdivision": "",
     }
-    respx.get(_GEOCODING_API_URL).mock(
-        return_value=httpx.Response(200, json=mock_response)
-    )
+    respx.get(_GEOCODING_API_URL).mock(return_value=httpx.Response(200, json=mock_response))
 
     result = await reverse_geocode(http_client, 42.66, -8.46)
     assert result.is_ocean is True
@@ -155,9 +149,7 @@ async def test_reverse_geocode_land_coordinates(http_client):
         "locality": "Dublin",
         "principalSubdivision": "County Dublin",
     }
-    respx.get(_GEOCODING_API_URL).mock(
-        return_value=httpx.Response(200, json=mock_response)
-    )
+    respx.get(_GEOCODING_API_URL).mock(return_value=httpx.Response(200, json=mock_response))
 
     result = await reverse_geocode(http_client, 53.34, -6.26)
     assert result.is_ocean is False
@@ -169,9 +161,7 @@ async def test_reverse_geocode_land_coordinates(http_client):
 @respx.mock
 async def test_reverse_geocode_network_error_returns_fallback(http_client):
     """Network errors return generic fallback instead of raising."""
-    respx.get(_GEOCODING_API_URL).mock(
-        side_effect=httpx.ConnectError("Connection failed")
-    )
+    respx.get(_GEOCODING_API_URL).mock(side_effect=httpx.ConnectError("Connection failed"))
 
     result = await reverse_geocode(http_client, 42.66, -8.46)
     assert result.is_ocean is False
@@ -196,9 +186,7 @@ async def test_reverse_geocode_http_error_returns_fallback(http_client):
 @respx.mock
 async def test_reverse_geocode_timeout_returns_fallback(http_client):
     """Timeouts return generic fallback instead of raising."""
-    respx.get(_GEOCODING_API_URL).mock(
-        side_effect=Exception("Request timed out")
-    )
+    respx.get(_GEOCODING_API_URL).mock(side_effect=Exception("Request timed out"))
 
     result = await reverse_geocode(http_client, 42.66, -8.46)
     assert result.is_ocean is False
@@ -209,9 +197,7 @@ async def test_reverse_geocode_timeout_returns_fallback(http_client):
 @respx.mock
 async def test_reverse_geocode_malformed_json_returns_fallback(http_client):
     """Malformed JSON response returns generic fallback."""
-    respx.get(_GEOCODING_API_URL).mock(
-        return_value=httpx.Response(200, text="not valid json")
-    )
+    respx.get(_GEOCODING_API_URL).mock(return_value=httpx.Response(200, text="not valid json"))
 
     result = await reverse_geocode(http_client, 42.66, -8.46)
     assert result.is_ocean is False

@@ -18,15 +18,18 @@ Position sources (in priority order)
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pydantic import BaseModel, Field
 from redis.asyncio import Redis
 
+from app.clients.geocoding_client import reverse_geocode
 from app.clients.opensky import AircraftNotFoundError, OpenSkyClientError, get_aircraft_position
 from app.core.config import get_settings
 from app.core.dependencies import (
@@ -35,15 +38,22 @@ from app.core.dependencies import (
     get_http_client,
     get_redis,
     position_update_rate_limit,
+    require_permission,
     session_creation_rate_limit,
 )
+from app.models.role import Permission
 from app.models.user import User
+from app.services.audio_repository import get_audio, save_audio
+from app.services.audio_service import get_voice_id_for_language, synthesize_story_audio
+from app.services.destination_tour_service import prepare_destination_tour
 from app.services.flight_session_repository import (
     create_session,
     get_session,
+    record_destination_tour_narration,
     record_position_and_narration,
     record_region_narration,
     record_upcoming_narration,
+    update_session_destination_tour,
 )
 from app.services.poi_repository import get_pois_by_source_ids
 from app.services.position_tracking_service import (
@@ -51,27 +61,57 @@ from app.services.position_tracking_service import (
     find_next_poi_to_narrate,
     find_next_upcoming_poi,
 )
+from app.services.corridor import distance_km
 from app.services.region_narration_service import (
     REGION_NARRATION_COOLDOWN_MINUTES,
     generate_region_narration,
 )
 from app.services.route_bundle_repository import get_route_bundle
 from app.services.story_repository import get_story
-from app.services.story_service import generate_upcoming_story
+from app.services.story_service import InsufficientFactsError, generate_upcoming_story
 
 router = APIRouter(prefix="/v1/sessions", tags=["live session"])
 logger = logging.getLogger("aloft.routers.sessions")
 
+# Pre-fetch radius for audio generation (before the 8km play trigger)
+PRE_FETCH_RADIUS_KM = 50.0
+
+
+async def _prefetch_audio(
+    db: AsyncIOMotorDatabase,
+    client: httpx.AsyncClient,
+    source_id: str,
+    language: str,
+) -> None:
+    """Background task to pre-fetch audio for a POI."""
+    try:
+        story = await get_story(db, source_id, language)
+        if story:
+            settings = get_settings()
+            voice_id = get_voice_id_for_language(language)
+            audio_bytes = await synthesize_story_audio(
+                story.text_content, language=language, http_client=client
+            )
+            await save_audio(db, source_id, language, voice_id, audio_bytes)
+    except Exception:
+        pass  # fail silently, text still returned
+
 
 class StartSessionRequest(BaseModel):
     route_key: str
+    language: str = "en"
 
-    model_config = {"json_schema_extra": {"examples": [{"route_key": "add-dxb-abc123"}]}}
+    model_config = {
+        "json_schema_extra": {"examples": [{"route_key": "add-dxb-abc123", "language": "en"}]}
+    }
 
 
 class StartSessionResponse(BaseModel):
     session_id: str
     route_key: str
+    destination_preview_ready: bool = False
+    arrival_city: str | None = None
+    arrival_country: str | None = None
 
 
 class PositionUpdateRequest(BaseModel):
@@ -116,10 +156,10 @@ class PositionUpdateRequest(BaseModel):
 
 
 class NarrationTrigger(BaseModel):
-    source_id: str | None = None  # None for region narrations
+    source_id: str | None = None  # None for region/destination_tour narrations
     name: str
     text_content: str | None = None
-    narration_type: str  # "poi" | "upcoming" | "region"
+    narration_type: str  # "poi" | "upcoming" | "destination_tour" | "region"
 
 
 class PositionUpdateResponse(BaseModel):
@@ -135,11 +175,13 @@ class PositionUpdateResponse(BaseModel):
     "",
     response_model=StartSessionResponse,
     summary="Start a live flight session",
-    dependencies=[Depends(session_creation_rate_limit())],
+    dependencies=[Depends(session_creation_rate_limit()), Depends(require_permission(Permission.CREATE_SESSION))],
 )
 async def start_session(
     body: StartSessionRequest,
-    _: User = Depends(get_current_user),
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(get_current_user),
+    client: httpx.AsyncClient = Depends(get_http_client),
     db: AsyncIOMotorDatabase = Depends(get_database),
     redis: Redis = Depends(get_redis),
 ) -> StartSessionResponse:
@@ -150,6 +192,11 @@ async def start_session(
     Sessions are stored in Redis with a **12-hour TTL** — auto-expires after
     the flight lands, never accumulates in MongoDB.
 
+    The destination tour narrations are generated in the background — the
+    endpoint returns immediately and `destination_preview_ready` will be True
+    only once the background task has stored them in the session. Check this
+    flag on subsequent position-update responses.
+
     404 if `route_key` doesn't match a prior discovery call.
     """
     bundle = await get_route_bundle(db, body.route_key)
@@ -159,20 +206,70 @@ async def start_session(
             detail=f"No route found for route_key '{body.route_key}'. Discover it first.",
         )
 
-    session = await create_session(redis, body.route_key)
-    return StartSessionResponse(session_id=session.session_id, route_key=session.route_key)
+    # Resolve arrival country/city from arrival coordinates
+    arrival_lat, arrival_lng = bundle.arrival
+    region = await reverse_geocode(client, arrival_lat, arrival_lng)
+    arrival_country = region.country or "your destination"
+    arrival_city = region.locality or arrival_country
+
+    # Create the session immediately so the client can start sending positions
+    # right away.  Destination tour narrations are prepared in a background
+    # task (up to ~20 Groq calls) and written back into the session when done.
+    session = await create_session(
+        redis,
+        body.route_key,
+        owner_id=current_user.user_id,
+        arrival_country=arrival_country,
+        arrival_city=arrival_city,
+        destination_tour_narrations=[],
+    )
+
+    async def _prepare_tour_background() -> None:
+        """Run prepare_destination_tour and patch the session when done."""
+        try:
+            tour_narrations = await prepare_destination_tour(
+                client,
+                db,
+                arrival_iata="",
+                arrival_country=arrival_country,
+                arrival_city=arrival_city,
+                language=body.language,
+            )
+            if tour_narrations:
+                await update_session_destination_tour(redis, session.session_id, tour_narrations)
+                logger.info(
+                    "Destination tour ready for session %s (%d narrations)",
+                    session.session_id,
+                    len(tour_narrations),
+                )
+        except Exception as exc:
+            logger.warning(
+                "Background destination tour preparation failed for session %s: %s",
+                session.session_id,
+                exc,
+            )
+
+    background_tasks.add_task(_prepare_tour_background)
+
+    return StartSessionResponse(
+        session_id=session.session_id,
+        route_key=session.route_key,
+        destination_preview_ready=False,  # Will be ready once background task completes
+        arrival_city=arrival_city,
+        arrival_country=arrival_country,
+    )
 
 
 @router.post(
     "/{session_id}/position",
     response_model=PositionUpdateResponse,
     summary="Send GPS position and get narration trigger",
-    dependencies=[Depends(position_update_rate_limit())],
+    dependencies=[Depends(position_update_rate_limit()), Depends(require_permission(Permission.UPDATE_SESSION))],
 )
 async def update_position(
     session_id: str,
     body: PositionUpdateRequest,
-    _: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     client: httpx.AsyncClient = Depends(get_http_client),
     db: AsyncIOMotorDatabase = Depends(get_database),
     redis: Redis = Depends(get_redis),
@@ -189,21 +286,33 @@ async def update_position(
        OpenSky is not requested or when OpenSky lookup fails (not in coverage,
        rate limit hit). `position_source` in the response reflects which was used.
 
-    **Three-tier narration logic:**
+    **Four-tier narration logic:**
     1. **POI directly below** — when the aircraft enters `trigger_radius_km` of an
        un-narrated POI, returns `triggered: true` with `narration_type: "poi"`.
     2. **POI coming up ahead** — if no POI is nearby but one is within 300km ahead,
        returns a teaser with `narration_type: "upcoming"`.
-    3. **Region/ocean context** — if no POIs are nearby or upcoming, and enough
-       time has passed since the last region narration (45-minute cooldown), returns
-       contextual narration with `narration_type: "region"`.
+    3. **Destination tour** — if no POIs are nearby or upcoming, and enough
+       time has passed since the last destination tour narration (8-minute cooldown),
+       returns a pre-generated destination highlight with `narration_type: "destination_tour"`.
+    4. **Region/ocean context** — if no POIs are nearby or upcoming and the destination
+       tour is exhausted or on cooldown, and enough time has passed since the last region
+       narration (45-minute cooldown), returns contextual narration with `narration_type: "region"`.
 
-    Each POI triggers **at most once** per session. Region narrations are
+    Each POI triggers **at most once** per session. Region and destination tour narrations are
     rate-limited to avoid repetition during long ocean crossings.
     """
     session = await get_session(redis, session_id)
     if session is None:
         raise HTTPException(status_code=404, detail=f"No session found for '{session_id}'")
+
+    # Enforce session ownership — reject positions submitted by a different user.
+    # owner_id="" is the legacy default for sessions created before this check was
+    # introduced; those are allowed through to avoid breaking existing clients.
+    if session.owner_id and session.owner_id != current_user.user_id:
+        raise HTTPException(
+            status_code=403,
+            detail="You do not have permission to update this session.",
+        )
 
     bundle = await get_route_bundle(db, session.route_key)
     if bundle is None:
@@ -219,24 +328,15 @@ async def update_position(
     position_source = "client"
 
     if body.icao24 or body.callsign:
-        settings = get_settings()
         try:
             pos = await get_aircraft_position(
                 client,
                 icao24=body.icao24,
                 callsign=body.callsign,
-                username=settings.opensky_username,
-                password=(
-                    settings.opensky_password.get_secret_value()
-                    if settings.opensky_password
-                    else None
-                ),
             )
             lat, lng = pos.latitude, pos.longitude
             position_source = "opensky"
-            logger.debug(
-                "OpenSky position used for session %s: %.4f, %.4f", session_id, lat, lng
-            )
+            logger.debug("OpenSky position used for session %s: %.4f, %.4f", session_id, lat, lng)
         except AircraftNotFoundError as exc:
             logger.warning(
                 "OpenSky: aircraft not found for session %s, falling back to client GPS: %s",
@@ -262,6 +362,21 @@ async def update_position(
         lat, lng, route_pois, already_narrated, body.trigger_radius_km
     )
     if next_poi is not None:
+        # Lazy audio generation: if POI within trigger radius but no audio yet — generate it now
+        settings = get_settings()
+        voice_id = get_voice_id_for_language(body.language)
+        existing_audio = await get_audio(db, next_poi.source_id, body.language, voice_id)
+        if existing_audio is None or not Path(existing_audio.file_path).exists():
+            try:
+                story = await get_story(db, next_poi.source_id, body.language)
+                if story:
+                    audio_bytes = await synthesize_story_audio(
+                        story.text_content, language=body.language, http_client=client
+                    )
+                    await save_audio(db, next_poi.source_id, body.language, voice_id, audio_bytes)
+            except Exception:
+                pass  # fail silently, text still returned
+        
         story = await get_story(db, next_poi.source_id, body.language)
         await record_position_and_narration(redis, session_id, lat, lng, next_poi.source_id)
         return PositionUpdateResponse(
@@ -276,6 +391,21 @@ async def update_position(
             lng_used=lng,
             position_source=position_source,
         )
+
+    # --- Pre-fetch audio for POIs within 50km so it's ready when needed ---
+    pois_to_prefetch = [
+        p for p in route_pois
+        if p.source_id not in already_narrated
+        and distance_km(body.lat, body.lng, 
+                        p.location["coordinates"][1], 
+                        p.location["coordinates"][0]) <= PRE_FETCH_RADIUS_KM
+    ]
+    for prefetch_poi in pois_to_prefetch[:3]:  # max 3 at once
+        settings = get_settings()
+        voice_id = get_voice_id_for_language(body.language)
+        existing = await get_audio(db, prefetch_poi.source_id, body.language, voice_id)
+        if existing is None:
+            asyncio.create_task(_prefetch_audio(db, client, prefetch_poi.source_id, body.language))
 
     # --- Tier 2: POI coming up ahead ---
     upcoming_result = find_next_upcoming_poi(
@@ -301,22 +431,53 @@ async def update_position(
                 lng_used=lng,
                 position_source=position_source,
             )
-        except Exception:
-            logger.warning("Upcoming story generation failed, falling through to region")
+        except (httpx.HTTPError, InsufficientFactsError) as exc:
+            logger.warning(
+                f"Upcoming story generation failed for {upcoming_poi.name}: {exc}, falling through to destination tour"
+            )
 
-    # --- Tier 3: Region/ocean context (with cooldown) ---
+    # --- Tier 3: Destination tour ---
+    settings = get_settings()
+    tour_cooldown_passed = session.last_destination_tour_at is None or datetime.now(
+        UTC
+    ) - session.last_destination_tour_at > timedelta(
+        minutes=settings.destination_tour_interval_minutes
+    )
+
+    has_tour_content = session.destination_tour_narrations and session.destination_tour_index < len(
+        session.destination_tour_narrations
+    )
+
+    if tour_cooldown_passed and has_tour_content:
+        narration_text = session.destination_tour_narrations[session.destination_tour_index]
+
+        # Update session state for destination tour using repository function
+        next_index = session.destination_tour_index + 1
+        await record_destination_tour_narration(redis, session_id, lat, lng, next_index)
+
+        return PositionUpdateResponse(
+            triggered=True,
+            narration=NarrationTrigger(
+                source_id=None,
+                name=f"About {session.arrival_city}",
+                text_content=narration_text,
+                narration_type="destination_tour",
+            ),
+            lat_used=lat,
+            lng_used=lng,
+            position_source=position_source,
+        )
+
+    # --- Tier 4: Region/ocean context (with cooldown) ---
     cooldown_minutes = REGION_NARRATION_COOLDOWN_MINUTES
     last_region = session.last_region_narration_at
-    cooldown_passed = (
-        last_region is None or
-        datetime.now(UTC) - last_region > timedelta(minutes=cooldown_minutes)
+    cooldown_passed = last_region is None or datetime.now(UTC) - last_region > timedelta(
+        minutes=cooldown_minutes
     )
 
     if cooldown_passed:
         try:
-            region_text = await generate_region_narration(
-                client, lat, lng, language=body.language
-            )
+            region_text = await generate_region_narration(client, lat, lng, language=body.language)
             await record_region_narration(redis, session_id, lat, lng)
             return PositionUpdateResponse(
                 triggered=True,
@@ -330,8 +491,11 @@ async def update_position(
                 lng_used=lng,
                 position_source=position_source,
             )
-        except Exception:
-            logger.warning("Region narration failed at (%s, %s)", lat, lng)
+        except Exception as exc:
+            # Region narration is best-effort and must never block the flight
+            # or crash the position endpoint -- a failure here just means we
+            # stay silent until the next GPS ping.
+            logger.warning("Region narration failed at (%s, %s): %s", lat, lng, exc)
 
     # Nothing to narrate right now
     await record_position_and_narration(redis, session_id, lat, lng, None)

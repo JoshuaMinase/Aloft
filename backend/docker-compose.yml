@@ -1,5 +1,9 @@
 version: '3.8'
 
+# IMPORTANT: Copy .env.docker to .env and fill in the required values before running
+# Required: MONGO_USERNAME and MONGO_PASSWORD (generate strong passwords)
+# Optional: API keys for external services
+
 services:
   # MongoDB - local development database
   mongodb:
@@ -9,8 +13,8 @@ services:
     ports:
       - "27017:27017"
     environment:
-      MONGO_INITDB_ROOT_USERNAME: aloft
-      MONGO_INITDB_ROOT_PASSWORD: aloft_dev_password
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_USERNAME}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD}
       MONGO_INITDB_DATABASE: aloft
     volumes:
       - mongodb_data:/data/db
@@ -55,7 +59,7 @@ services:
       LOG_LEVEL: INFO
       
       # Database - connects to local MongoDB service
-      MONGODB_URI: mongodb://aloft:aloft_dev_password@mongodb:27017/aloft?authSource=admin
+      MONGODB_URI: mongodb://${MONGO_USERNAME}:${MONGO_PASSWORD}@mongodb:27017/aloft?authSource=admin
       MONGODB_DB_NAME: aloft
       
       # Redis - connects to local Redis service
@@ -65,7 +69,8 @@ services:
       CORS_ALLOWED_ORIGINS: '["*"]'
       
       # JWT - development secret (CHANGE THIS IN PRODUCTION)
-      JWT_SECRET_KEY: change-me-in-production-use-secrets-token-hex-32
+      # Generate with: python -c "import secrets; print(secrets.token_hex(32))"
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-me-in-production-use-secrets-token-hex-32}
       
       # API Keys - set these in .env file or environment
       # GROQ_API_KEY: your_groq_api_key_here

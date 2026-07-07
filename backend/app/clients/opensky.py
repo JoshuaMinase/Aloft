@@ -32,7 +32,9 @@ logger = logging.getLogger("aloft.clients.opensky")
 
 _BASE_URL = "https://opensky-network.org/api"
 _STATES_ENDPOINT = f"{_BASE_URL}/states/all"
-_TOKEN_URL = "https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token"
+_TOKEN_URL = (
+    "https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token"
+)
 
 _RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 _MAX_ATTEMPTS = 3
@@ -124,9 +126,7 @@ class _TokenCache:
         payload = response.json()
         token = payload.get("access_token")
         if not token:
-            raise OpenSkyClientError(
-                f"OpenSky token endpoint returned no access_token: {payload}"
-            )
+            raise OpenSkyClientError(f"OpenSky token endpoint returned no access_token: {payload}")
         return token
 
     def invalidate(self) -> None:
@@ -226,9 +226,7 @@ async def get_aircraft_position(
             )
         except httpx.RequestError as exc:
             last_error = exc
-            logger.warning(
-                "OpenSky network error attempt %d/%d: %s", attempt, _MAX_ATTEMPTS, exc
-            )
+            logger.warning("OpenSky network error attempt %d/%d: %s", attempt, _MAX_ATTEMPTS, exc)
         else:
             if response.status_code == 401 and token:
                 _token_cache.invalidate()
@@ -262,13 +260,10 @@ async def get_aircraft_position(
 
             if response.status_code == 404:
                 raise AircraftNotFoundError(
-                    f"Aircraft not found (HTTP 404) for "
-                    f"icao24={icao24!r}, callsign={callsign!r}."
+                    f"Aircraft not found (HTTP 404) for icao24={icao24!r}, callsign={callsign!r}."
                 )
             if response.status_code in _RETRYABLE_STATUS_CODES:
-                last_error = OpenSkyClientError(
-                    f"OpenSky returned HTTP {response.status_code}"
-                )
+                last_error = OpenSkyClientError(f"OpenSky returned HTTP {response.status_code}")
                 logger.warning(
                     "OpenSky retryable error %d, attempt %d/%d",
                     response.status_code,
@@ -277,8 +272,7 @@ async def get_aircraft_position(
                 )
             else:
                 raise OpenSkyClientError(
-                    f"OpenSky non-retryable HTTP {response.status_code}: "
-                    f"{response.text[:200]}"
+                    f"OpenSky non-retryable HTTP {response.status_code}: {response.text[:200]}"
                 )
 
         if attempt < _MAX_ATTEMPTS:

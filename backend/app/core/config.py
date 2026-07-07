@@ -12,13 +12,25 @@ class Settings(BaseSettings):
     environment: str = "development"
     log_level: str = "INFO"
     app_contact_email: str = "CHANGE_ME@example.com"
+    # MongoDB connection - configure via MONGODB_URI environment variable
+    # Development default: mongodb://localhost:27017/?directConnection=true
+    # Production example: mongodb+srv://user:pass@cluster.mongodb.net/aloft
     mongodb_uri: str = "mongodb://localhost:27017/?directConnection=true"
     mongodb_db_name: str = "aloft"
-    
+
     # CORS configuration
     # In production, set this to specific origins like ["https://aloft.app", "https://www.aloft.app"]
     # Use ["*"] for development to allow all origins
     cors_allowed_origins: list[str] = ["*"]
+
+    # CSP configuration
+    # In production, set this to specific API domains your frontend needs to connect to
+    # Example: ["https://api.groq.com", "https://api.elevenlabs.io"]
+    # Leave empty for development defaults
+    csp_allowed_connect_origins: list[str] = []
+    # CSP report-only mode for testing (logs violations without blocking)
+    # Set to true in development/staging to test CSP without breaking the app
+    csp_report_only: bool = False
     # None means "no Redis configured" -- rate limiting fails open (allows
     # the request) rather than blocking the whole app from working if
     # Redis isn't set up yet. See core/redis_client.py and
@@ -37,7 +49,7 @@ class Settings(BaseSettings):
     # Position updates are called every few seconds from the mobile app.
     # 600/min = 10 calls/sec — generous enough for any real polling interval.
     rate_limit_position_updates_per_minute: int = 600
-    
+
     # Additional rate limits for expensive operations
     rate_limit_poi_discovery_per_hour: int = 30
     rate_limit_story_generation_per_hour: int = 50
@@ -46,10 +58,16 @@ class Settings(BaseSettings):
     rate_limit_session_creation_per_hour: int = 20
     rate_limit_mixed_audio_per_hour: int = 15
     rate_limit_image_retrieval_per_hour: int = 40
-    
+
     # Account lockout settings
     max_failed_login_attempts: int = 5
     account_lockout_duration_minutes: int = 30
+
+    # Rate limiting algorithm selection (fixed, sliding, or token_bucket)
+    # - fixed: Simple window counter, allows ~2x the limit at window boundaries
+    # - sliding: More accurate, uses Redis sorted sets (default)
+    # - token_bucket: Allows burst traffic, smoother rate limiting
+    rate_limit_algorithm: str = "sliding"
 
     # Maximum concurrent Groq + ElevenLabs calls during batch content
     # generation (POST /routes/{route_key}/content).
@@ -100,12 +118,14 @@ class Settings(BaseSettings):
     @property
     def r2_configured(self) -> bool:
         """True when all four R2 credentials are present."""
-        return all([
-            self.r2_account_id,
-            self.r2_access_key_id,
-            self.r2_secret_access_key,
-            self.r2_bucket_name,
-        ])
+        return all(
+            [
+                self.r2_account_id,
+                self.r2_access_key_id,
+                self.r2_secret_access_key,
+                self.r2_bucket_name,
+            ]
+        )
 
     # ---------------------------------------------------------------------------
     # JWT authentication
@@ -132,7 +152,7 @@ class Settings(BaseSettings):
         ):
             raise ValueError(
                 "JWT_SECRET_KEY must be changed from the default before running in production. "
-                "Generate one with: python -c \"import secrets; print(secrets.token_hex(32))\""
+                'Generate one with: python -c "import secrets; print(secrets.token_hex(32))"'
             )
         return self
 
@@ -143,10 +163,7 @@ class Settings(BaseSettings):
         Wildcard CORS allows any origin to access your API, which is a security risk.
         In production, specify your actual frontend domain(s).
         """
-        if (
-            self.environment.lower() == "production"
-            and self.cors_allowed_origins == ["*"]
-        ):
+        if self.environment.lower() == "production" and self.cors_allowed_origins == ["*"]:
             raise ValueError(
                 "CORS_ALLOWED_ORIGINS cannot be ['*'] in production. "
                 "Set it to your actual frontend domain(s), e.g., ['https://aloft.app', 'https://www.aloft.app']"
@@ -196,6 +213,18 @@ class Settings(BaseSettings):
     opensky_client_secret: SecretStr | None = None
 
     # ---------------------------------------------------------------------------
+    # POI curation and destination tour settings
+    # ---------------------------------------------------------------------------
+    # Maximum number of curated POIs to keep after discovery (quality over quantity)
+    max_curated_pois_per_route: int = 30
+    # Number of destination highlights to generate for the destination tour
+    destination_highlights_count: int = 20
+    # Minutes between destination tour narrations during ocean crossings
+    destination_tour_interval_minutes: int = 8
+    # Minimum spacing in km between curated POIs (prevents clustering in one city)
+    poi_min_spacing_km: float = 150.0
+
+    # ---------------------------------------------------------------------------
     # Email service for password reset
     # ---------------------------------------------------------------------------
     # Resend (recommended): https://resend.com/ - Free tier: 3,000 emails/month
@@ -204,9 +233,45 @@ class Settings(BaseSettings):
     resend_api_key: SecretStr | None = None
     sendgrid_api_key: SecretStr | None = None
     from_email: str = "noreply@aloft.app"
-    frontend_base_url: str = "http://localhost:3000"  # Your frontend URL for reset links
+    # Frontend base URL for password reset links and email verification
+    # Configure via FRONTEND_BASE_URL environment variable
+    # Development default: http://localhost:3000
+    # Production example: https://aloft.app
+    frontend_base_url: str = "http://localhost:3000"
+
+    # ---------------------------------------------------------------------------
+    # OneSignal push notifications
+    # ---------------------------------------------------------------------------
+    # OneSignal free tier: 10,000 notifications/month
+    # Get credentials from: https://onesignal.com/
+    onesignal_app_id: str | None = None
+    onesignal_api_key: SecretStr | None = None
 
 
 @lru_cache
 def get_settings() -> Settings:
+    """Return the application settings, cached after the first call.
+
+    The @lru_cache decorator means Settings() is only constructed once per
+    process. Subsequent calls return the same instance without re-reading
+    environment variables or the .env file.
+
+    UNIT TESTING:
+    Because the result is cached, tests that need different settings values
+    must clear the cache after patching the environment, otherwise the
+    pre-patch values remain in effect:
+
+        import os
+        from app.core.config import get_settings
+
+        def test_something(monkeypatch):
+            monkeypatch.setenv("JWT_SECRET_KEY", "test-secret-32-chars-xxxxxxxxxxxxxxxx")
+            get_settings.cache_clear()        # ← required
+            settings = get_settings()
+            assert settings.jwt_secret_key.get_secret_value() == "test-secret-..."
+            get_settings.cache_clear()        # ← clean up for subsequent tests
+
+    Alternatively, use the override_settings fixture if your conftest.py
+    provides one.
+    """
     return Settings()

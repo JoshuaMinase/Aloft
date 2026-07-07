@@ -9,8 +9,10 @@ from app.core.dependencies import (
     get_current_user,
     get_database,
     get_http_client,
+    require_permission,
     story_generation_rate_limit,
 )
+from app.models.role import Permission
 from app.models.user import User
 from app.services.poi_repository import get_poi
 from app.services.story_repository import get_story, save_story
@@ -33,7 +35,7 @@ class StoryResponse(BaseModel):
     "/{source_id}/story",
     response_model=StoryResponse,
     summary="Generate a narration story for a POI",
-    dependencies=[Depends(story_generation_rate_limit())],
+    dependencies=[Depends(story_generation_rate_limit()), Depends(require_permission(Permission.CREATE_CONTENT))],
 )
 async def create_story(
     source_id: str = Path(..., max_length=200, description="POI source ID, e.g. `wikipedia:12345`"),

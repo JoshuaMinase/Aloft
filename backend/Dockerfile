@@ -32,9 +32,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PATH="/opt/venv/bin:$PATH"
 
-# Install only runtime dependencies
+# Install only runtime dependencies (no libpq5 — app uses MongoDB, not PostgreSQL)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libpq5 \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
@@ -50,6 +49,12 @@ RUN chown -R aloft:aloft /app
 
 # Copy application code
 COPY --chown=aloft:aloft app ./app
+
+# Copy gunicorn config (required by CMD)
+COPY --chown=aloft:aloft gunicorn.conf.py ./gunicorn.conf.py
+
+# Copy background music assets for audio mixing
+COPY --chown=aloft:aloft music_assets ./music_assets
 
 # Create audio storage directory with proper permissions
 RUN mkdir -p /app/audio_storage && \

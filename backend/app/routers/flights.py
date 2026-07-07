@@ -13,10 +13,13 @@ from app.core.dependencies import (
     get_database,
     get_http_client,
     get_redis,
+    require_permission,
 )
+from app.models.role import Permission
 from app.models.user import User
 from app.services.flight_resolution import resolve_flight_route
 from app.services.live_flight_service import LiveFlightError, prepare_live_flight_tracking
+from app.services.poi_curator import curate_pois
 from app.services.poi_repository import save_pois
 from app.services.poi_service import find_pois_along_corridor
 from app.services.route_bundle_repository import save_route_bundle
@@ -37,11 +40,13 @@ class DiscoverPoisByFlightResponse(BaseModel):
     "/{flight_iata}/pois",
     response_model=DiscoverPoisByFlightResponse,
     summary="Discover POIs for a flight number",
-    dependencies=[Depends(flight_lookup_rate_limit())],
+    dependencies=[Depends(flight_lookup_rate_limit()), Depends(require_permission(Permission.LOOKUP_FLIGHT))],
 )
 async def discover_pois_for_flight(
     flight_iata: str,
-    width_km: float = Query(default=20.0, ge=0.1, le=500.0, description="Corridor width in km (0.1–500)"),
+    width_km: float = Query(
+        default=20.0, ge=0.1, le=500.0, description="Corridor width in km (0.1–500)"
+    ),
     _: User = Depends(get_current_user),
     client: httpx.AsyncClient = Depends(get_http_client),
     db: AsyncIOMotorDatabase = Depends(get_database),
@@ -69,7 +74,12 @@ async def discover_pois_for_flight(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     inserted, poi_source_ids = await save_pois(db, pois)
-    bundle = await save_route_bundle(db, departure, arrival, poi_source_ids)
+
+    # Curate POIs to keep only the best ones (quality over quantity)
+    curated_pois = curate_pois(pois, departure, arrival)
+    curated_source_ids = [f"wikipedia:{p.page_id}" for p in curated_pois]
+
+    bundle = await save_route_bundle(db, departure, arrival, curated_source_ids)
 
     return DiscoverPoisByFlightResponse(
         flight_iata=flight_iata,
@@ -92,15 +102,18 @@ async def discover_pois_for_flight(
         "If the aircraft isn't in ADS-B coverage, the route and POIs "
         "are still returned with position_source='unavailable'."
     ),
-    dependencies=[Depends(flight_lookup_rate_limit())],
+    dependencies=[Depends(flight_lookup_rate_limit()), Depends(require_permission(Permission.LOOKUP_FLIGHT))],
 )
-async def live_track_flight(
-    flight_iata: str,
+async def live_track_flight(    flight_iata: str,
     language: str = Query("en", description="Story language (e.g. en, ar, fr, de)"),
     width_km: float = Query(default=20.0, ge=0.1, le=500.0, description="Corridor width in km"),
-    trigger_radius_km: float = Query(default=50.0, ge=0.1, le=500.0, description="Narration trigger radius in km"),
+    trigger_radius_km: float = Query(
+        default=50.0, ge=0.1, le=500.0, description="Narration trigger radius in km"
+    ),
     max_upcoming: int = Query(default=20, ge=0, le=200, description="Max upcoming POIs to return"),
-    generate_missing_stories: bool = Query(default=True, description="Auto-generate stories for POIs without cached stories"),
+    generate_missing_stories: bool = Query(
+        default=True, description="Auto-generate stories for POIs without cached stories"
+    ),
     _: User = Depends(get_current_user),
     client: httpx.AsyncClient = Depends(get_http_client),
     db: AsyncIOMotorDatabase = Depends(get_database),
@@ -142,4 +155,3 @@ async def live_track_flight(
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     return result.model_dump(mode="json")
-

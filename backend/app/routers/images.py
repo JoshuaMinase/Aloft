@@ -28,7 +28,9 @@ from app.core.dependencies import (
     get_database,
     get_http_client,
     image_retrieval_rate_limit,
+    require_permission,
 )
+from app.models.role import Permission
 from app.models.user import User
 from app.services.poi_repository import get_poi, save_poi_images
 
@@ -59,7 +61,7 @@ class PoiImagesResponse(BaseModel):
     "/{source_id}/images",
     response_model=PoiImagesResponse,
     summary="Fetch real photos for a POI",
-    dependencies=[Depends(image_retrieval_rate_limit())],
+    dependencies=[Depends(image_retrieval_rate_limit()), Depends(require_permission(Permission.READ_POI))],
 )
 async def fetch_images(
     source_id: str,

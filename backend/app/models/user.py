@@ -28,8 +28,8 @@ class User(BaseModel):
     last_login_at: datetime | None = None  # Last successful login
     last_login_ip: str | None = None  # IP address of last login
     password_changed_at: datetime | None = None  # Last password change
-    password_reset_token: str | None = None  # JWT token for password reset
-    password_reset_expires: datetime | None = None  # Expiration for reset token
+    # NOTE: password reset uses Redis-backed opaque tokens (see password_reset_service.py).
+    # There are no password_reset fields on this model — that data never touches MongoDB.
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
@@ -43,6 +43,8 @@ class UserPublic(BaseModel):
     is_active: bool
     is_verified: bool
     mfa_enabled: bool
+    last_login_at: datetime | None = None
+    last_login_ip: str | None = None
     created_at: datetime
     updated_at: datetime
 

@@ -139,4 +139,5 @@ async def test_synthesize_speech_raises_when_api_key_not_set(monkeypatch):
     monkeypatch.setattr("app.clients.tts.get_settings", lambda: fake_settings)
 
     with pytest.raises(TtsClientError, match="ELEVENLABS_API_KEY"):
-        await synthesize_speech("Some text", voice_id=_VOICE_ID)
+        async with httpx.AsyncClient() as client:
+            await synthesize_speech("Some text", voice_id=_VOICE_ID, http_client=client)

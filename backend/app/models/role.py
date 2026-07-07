@@ -11,12 +11,11 @@ Implements a flexible RBAC system with:
 from __future__ import annotations
 
 from enum import Enum
-from typing import Set
 
 
 class Role(str, Enum):
     """User roles with hierarchical permissions."""
-    
+
     ADMIN = "admin"  # Full system access
     PREMIUM = "premium"  # Enhanced features and higher limits
     USER = "user"  # Standard user access
@@ -25,48 +24,48 @@ class Role(str, Enum):
 
 class Permission(str, Enum):
     """Granular permissions for fine-grained access control."""
-    
+
     # User management
     CREATE_USER = "create_user"
     READ_USER = "read_user"
     UPDATE_USER = "update_user"
     DELETE_USER = "delete_user"
     LIST_USERS = "list_users"
-    
+
     # Content management
     CREATE_CONTENT = "create_content"
     READ_CONTENT = "read_content"
     UPDATE_CONTENT = "update_content"
     DELETE_CONTENT = "delete_content"
     LIST_CONTENT = "list_content"
-    
+
     # POI management
     CREATE_POI = "create_poi"
     READ_POI = "read_poi"
     UPDATE_POI = "update_poi"
     DELETE_POI = "delete_poi"
     LIST_POI = "list_poi"
-    
+
     # Audio management
     CREATE_AUDIO = "create_audio"
     READ_AUDIO = "read_audio"
     DELETE_AUDIO = "delete_audio"
-    
+
     # Session management
     CREATE_SESSION = "create_session"
     READ_SESSION = "read_session"
     UPDATE_SESSION = "update_session"
     DELETE_SESSION = "delete_session"
-    
+
     # Route management
     CREATE_ROUTE = "create_route"
     READ_ROUTE = "read_route"
     DELETE_ROUTE = "delete_route"
     DOWNLOAD_ROUTE = "download_route"
-    
+
     # Flight management
     LOOKUP_FLIGHT = "lookup_flight"
-    
+
     # Admin-only permissions
     MANAGE_ROLES = "manage_roles"
     VIEW_AUDIT_LOGS = "view_audit_logs"
@@ -76,7 +75,7 @@ class Permission(str, Enum):
 
 
 # Role-to-permission mapping
-ROLE_PERMISSIONS: dict[Role, Set[Permission]] = {
+ROLE_PERMISSIONS: dict[Role, set[Permission]] = {
     Role.ADMIN: {
         # Full access to all permissions
         Permission.CREATE_USER,
@@ -170,19 +169,19 @@ def has_permission(role: Role, permission: Permission) -> bool:
     return permission in ROLE_PERMISSIONS.get(role, set())
 
 
-def has_any_permission(role: Role, permissions: Set[Permission]) -> bool:
+def has_any_permission(role: Role, permissions: set[Permission]) -> bool:
     """Check if a role has any of the specified permissions."""
     role_permissions = ROLE_PERMISSIONS.get(role, set())
     return bool(role_permissions & permissions)
 
 
-def has_all_permissions(role: Role, permissions: Set[Permission]) -> bool:
+def has_all_permissions(role: Role, permissions: set[Permission]) -> bool:
     """Check if a role has all of the specified permissions."""
     role_permissions = ROLE_PERMISSIONS.get(role, set())
     return permissions.issubset(role_permissions)
 
 
-def get_role_permissions(role: Role) -> Set[Permission]:
+def get_role_permissions(role: Role) -> set[Permission]:
     """Get all permissions for a given role."""
     return ROLE_PERMISSIONS.get(role, set())
 

@@ -35,14 +35,23 @@ from app.models.user import User, UserPublic
 from app.services.auth_service import (
     AuthError,
     create_access_token,
-    create_password_reset_token,
     create_refresh_token,
-    decode_password_reset_token,
     decode_refresh_token,
     hash_password,
     is_refresh_token_revoked,
     revoke_refresh_token,
     verify_password,
+)
+from app.services.password_reset_service import (
+    PasswordResetError,
+    delete_password_reset_token,
+    get_user_id_from_reset_token,
+    send_password_reset_email,
+)
+from app.services.security_monitoring import (
+    log_failed_login,
+    log_security_event,
+    log_successful_login,
 )
 from app.services.user_repository import (
     create_user,
@@ -50,18 +59,11 @@ from app.services.user_repository import (
     get_user_by_id,
     update_user,
 )
-from app.services.email_service import EmailError, send_password_reset_email
 from app.services.verification_service import (
     VerificationError,
     delete_verification_token,
     get_user_id_from_token,
     send_verification_email,
-)
-from app.services.security_monitoring import (
-    log_failed_login,
-    log_security_event,
-    log_successful_login,
-    security_monitor,
 )
 
 router = APIRouter(prefix="/v1/auth", tags=["auth"])
@@ -70,8 +72,12 @@ logger = logging.getLogger("aloft.auth")
 # Brute-force protection for auth endpoints.
 # Login: 20 attempts/hour per IP is generous for legitimate use, blocks password guessing.
 # Signup: 10 accounts/hour per IP prevents account-creation spam.
-_login_rate_limit = rate_limit("auth_login", max_requests=20, window_seconds=3600, use_user_id=False)
-_signup_rate_limit = rate_limit("auth_signup", max_requests=10, window_seconds=3600, use_user_id=False)
+_login_rate_limit = rate_limit(
+    "auth_login", max_requests=20, window_seconds=3600, use_user_id=False
+)
+_signup_rate_limit = rate_limit(
+    "auth_signup", max_requests=10, window_seconds=3600, use_user_id=False
+)
 
 
 def _get_optional_redis() -> Redis | None:
@@ -89,7 +95,7 @@ def _get_optional_redis() -> Redis | None:
 
 class SignupRequest(BaseModel):
     email: EmailStr
-    password: str
+    password: str = Field(..., min_length=8, max_length=128)
 
     model_config = {
         "json_schema_extra": {
@@ -159,16 +165,11 @@ async def signup(
     - Account is created with is_verified=False.
     - A verification email is sent with a link to verify the email address.
     - User must verify email before logging in.
+    - In development, the verification token is logged to console if email fails.
 
     422 if the email is invalid.
     409 if the email is already registered.
     """
-    if len(body.password) < 8:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Password must be at least 8 characters.",
-        )
-
     try:
         user = await create_user(db, body.email, hash_password(body.password))
     except ValueError as exc:
@@ -176,8 +177,18 @@ async def signup(
 
     # Send verification email
     try:
-        redis = _get_rate_limit_redis()
-        await send_verification_email(redis, user.user_id, user.email)
+        try:
+            redis = _get_rate_limit_redis()
+        except RuntimeError:
+            redis = None
+        token = await send_verification_email(redis, user.user_id, user.email)
+        
+        # In development, log the token for easier testing
+        settings = get_settings()
+        if settings.environment.lower() == "development":
+            logger.info(f"DEV MODE: Verification token for {user.email}: {token}")
+            logger.info(f"DEV MODE: Use POST /v1/auth/dev-verify with token: {token}")
+            
     except VerificationError as exc:
         # Log the error but don't fail the signup - user can request resend
         logger.warning(f"Failed to send verification email to {user.email}: {exc}")
@@ -187,16 +198,23 @@ async def signup(
     )
 
 
-@router.get(
+class VerifyEmailRequest(BaseModel):
+    token: str
+
+
+@router.post(
     "/verify-email",
     response_model=TokenResponse,
     summary="Verify email address with token",
 )
 async def verify_email(
-    token: str,
+    body: VerifyEmailRequest,
     db: AsyncIOMotorDatabase = Depends(get_database),
 ) -> TokenResponse:
     """Verify email address using a token from the verification email.
+
+    Accepts the token in the **request body** (not a query parameter) so the
+    token is never written to server access logs or browser history.
 
     Validates the token from Redis, marks the user as verified, and returns
     authentication tokens (this is when the user gets logged in for the first time).
@@ -207,7 +225,7 @@ async def verify_email(
     404 if the user no longer exists.
     """
     redis = _get_rate_limit_redis()
-    user_id = await get_user_id_from_token(redis, token)
+    user_id = await get_user_id_from_token(redis, body.token)
 
     if not user_id:
         raise HTTPException(
@@ -227,7 +245,7 @@ async def verify_email(
     await update_user(db, user)
 
     # Delete the verification token (single-use)
-    await delete_verification_token(redis, token)
+    await delete_verification_token(redis, body.token)
 
     logger.info(f"Email verified for user {user.user_id}")
 
@@ -300,7 +318,7 @@ async def login(
 
     Returns the same 401 for both "no such user" and "wrong password" —
     deliberately vague to avoid leaking whether an email is registered.
-    
+
     Implements account lockout after 5 failed login attempts.
     """
     _WRONG_CREDS = HTTPException(
@@ -313,7 +331,8 @@ async def login(
     if user is None:
         # Log failed login for non-existent user (still track IP)
         client_ip = request.client.host if request.client else "unknown"
-        log_failed_login("unknown", body.email, client_ip, request.headers.get("user-agent", "unknown"))
+        user_agent = request.headers.get("user-agent", "unknown")
+        await log_failed_login("unknown", body.email, client_ip, user_agent)
         raise _WRONG_CREDS
 
     # Check if account is locked
@@ -329,19 +348,16 @@ async def login(
         # Increment failed login attempts
         user.failed_login_attempts += 1
         client_ip = request.client.host if request.client else "unknown"
-        
+
         # Log to security monitor
-        log_failed_login(
-            user.user_id,
-            user.email,
-            client_ip,
-            request.headers.get("user-agent", "unknown")
+        await log_failed_login(
+            user.user_id, user.email, client_ip, request.headers.get("user-agent", "unknown")
         )
-        
+
         # Lock account after 5 failed attempts
         if user.failed_login_attempts >= 5:
             user.locked_until = datetime.now(UTC) + timedelta(minutes=30)
-            log_security_event(
+            await log_security_event(
                 event_type="ACCOUNT_LOCKED",
                 severity="warning",
                 user_id=user.user_id,
@@ -352,7 +368,7 @@ async def login(
                 f"Account locked for user {user.user_id} after 5 failed login attempts "
                 f"from IP: {client_ip}"
             )
-        
+
         await update_user(db, user)
         raise _WRONG_CREDS
 
@@ -378,16 +394,13 @@ async def login(
     user.last_login_at = datetime.now(UTC)
     user.last_login_ip = request.client.host if request.client else "unknown"
     await update_user(db, user)
-    
+
     # Log successful login to security monitor
-    log_successful_login(
-        user.user_id,
-        user.email,
-        user.last_login_ip,
-        request.headers.get("user-agent", "unknown")
+    await log_successful_login(
+        user.user_id, user.email, user.last_login_ip, request.headers.get("user-agent", "unknown")
     )
-    
-    log_security_event(
+
+    await log_security_event(
         event_type="SUCCESSFUL_LOGIN",
         severity="info",
         user_id=user.user_id,
@@ -487,7 +500,9 @@ async def logout(
     except AuthError as exc:
         # Still return 204 for logout - we want to invalidate the session
         # even if the token is expired/invalid, as long as the user is authenticated
-        logger.warning(f"Invalid refresh token provided during logout for user {current_user.user_id}: {exc}")
+        logger.warning(
+            f"Invalid refresh token provided during logout for user {current_user.user_id}: {exc}"
+        )
         return None
 
     jti: str = payload.get("jti", "")
@@ -530,42 +545,43 @@ async def forgot_password(
     The reset link points to your frontend's reset page with the token as a query parameter.
     """
     user = await get_user_by_email(db, body.email)
-    
+
     if user is None:
         # Don't reveal whether the email exists - prevent enumeration
         logger.info(f"Password reset requested for non-existent email: {body.email}")
-        return {"message": "If an account with this email exists, a password reset link has been sent."}
-    
+        return {
+            "message": "If an account with this email exists, a password reset link has been sent."
+        }
+
     if not user.is_active:
         # Don't reveal account status to prevent enumeration
         logger.info(f"Password reset requested for inactive account: {body.email}")
-        return {"message": "If an account with this email exists, a password reset link has been sent."}
-    
-    # Generate password reset token
-    reset_token = create_password_reset_token(user.user_id)
-    
-    # Store the token in the user document for validation
-    user.password_reset_token = reset_token
-    user.password_reset_expires = datetime.now(UTC) + timedelta(minutes=15)
-    await update_user(db, user)
-    
-    # Send email with reset link
-    from app.core.config import get_settings
-    settings = get_settings()
+        return {
+            "message": "If an account with this email exists, a password reset link has been sent."
+        }
+
+    # Send password reset email using Redis-based token storage
+    redis = _get_rate_limit_redis()
+    reset_token: str | None = None
     try:
-        await send_password_reset_email(
+        reset_token = await send_password_reset_email(
+            redis=redis,
+            user_id=user.user_id,
             email=user.email,
-            reset_token=reset_token,
-            base_url=settings.frontend_base_url,
         )
-    except EmailError as exc:
-        # Log the error but don't fail the request - the token is still valid
+    except PasswordResetError as exc:
+        # Log the error but don't fail the request - security best practice
         logger.error(f"Failed to send password reset email to {user.email}: {exc}")
-        # In development, log the reset link so testing is possible
-        if settings.environment.lower() == "development":
+        # In development, log the reset link so testing is possible.
+        # reset_token may be None if send_password_reset_email raised before
+        # returning — guard against UnboundLocalError with the default above.
+        settings = get_settings()
+        if settings.environment.lower() == "development" and reset_token is not None:
             reset_link = f"{settings.frontend_base_url}/reset-password?token={reset_token}"
-            logger.warning(f"Email service not configured. Reset link for {user.email}: {reset_link}")
-    
+            logger.warning(
+                f"Email service not configured. Reset link for {user.email}: {reset_link}"
+            )
+
     logger.info(f"Password reset email sent to {user.email}")
     return {"message": "If an account with this email exists, a password reset link has been sent."}
 
@@ -581,52 +597,40 @@ async def reset_password(
 ) -> dict[str, str]:
     """Reset password using a token from the forgot-password email.
 
-    Validates the token and updates the user's password if valid.
+    Validates the token from Redis and updates the user's password if valid.
     The token is single-use and expires after 15 minutes.
 
     400 if the token is invalid or expired.
     404 if the user no longer exists.
     """
-    try:
-        payload = decode_password_reset_token(body.token)
-    except AuthError as exc:
+    redis = _get_rate_limit_redis()
+
+    # Validate token from Redis
+    user_id = await get_user_id_from_reset_token(redis, body.token)
+    if user_id is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(exc),
-        ) from exc
-    
-    user_id = payload["sub"]
+            detail="Invalid or expired reset token",
+        )
+
     user = await get_user_by_id(db, user_id)
-    
+
     if user is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="User not found",
         )
-    
-    # Verify the token matches the one stored in the user document
-    if user.password_reset_token != body.token:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid or expired reset token",
-        )
-    
-    # Check if the token has expired
-    if user.password_reset_expires and user.password_reset_expires < datetime.now(UTC):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Reset token has expired",
-        )
-    
+
     # Update the password
     user.hashed_password = hash_password(body.new_password)
-    user.password_reset_token = None  # Clear the reset token
-    user.password_reset_expires = None
     user.password_changed_at = datetime.now(UTC)
     user.failed_login_attempts = 0  # Reset failed login attempts
     user.locked_until = None  # Unlock account if it was locked
     await update_user(db, user)
-    
+
+    # Delete the reset token (single-use)
+    await delete_password_reset_token(redis, body.token)
+
     logger.info(f"Password reset successful for user {user.user_id}")
     return {"message": "Password has been reset successfully"}
 
@@ -644,33 +648,12 @@ async def get_me(current_user: User = Depends(get_current_user)) -> UserPublic:
     return UserPublic(
         user_id=current_user.user_id,
         email=current_user.email,
+        role=current_user.role,
         is_active=current_user.is_active,
+        is_verified=current_user.is_verified,
+        mfa_enabled=current_user.mfa_enabled,
+        last_login_at=current_user.last_login_at,
+        last_login_ip=current_user.last_login_ip,
         created_at=current_user.created_at,
+        updated_at=current_user.updated_at,
     )
-
-
-@router.post(
-    "/dev-verify",
-    include_in_schema=False,
-    summary="DEV ONLY: Bypass email verification",
-)
-async def dev_verify(
-    body: ForgotPasswordRequest,
-    db: AsyncIOMotorDatabase = Depends(get_database),
-) -> dict[str, str]:
-    """Mark a user as verified without email. Development only.
-
-    This endpoint is hidden from OpenAPI and only works when
-    ENVIRONMENT=development.
-    """
-    settings = get_settings()
-    if settings.environment.lower() != "development":
-        raise HTTPException(status_code=404, detail="Not found")
-
-    user = await get_user_by_email(db, body.email)
-    if user is None:
-        raise HTTPException(status_code=404, detail="User not found")
-
-    user.is_verified = True
-    await update_user(db, user)
-    return {"message": f"User {user.email} verified (dev bypass)"}

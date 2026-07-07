@@ -31,7 +31,6 @@ _pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 # tokens are not interchangeable even if they share the same secret.
 _ACCESS_TOKEN_TYPE = "access"
 _REFRESH_TOKEN_TYPE = "refresh"
-_PASSWORD_RESET_TOKEN_TYPE = "password_reset"
 _JTI_BLOCKLIST_PREFIX = "jti_blocked:"
 
 
@@ -176,50 +175,8 @@ async def is_refresh_token_revoked(redis: Redis | None, jti: str) -> bool:
     return await redis.exists(f"{_JTI_BLOCKLIST_PREFIX}{jti}") > 0
 
 
-def create_password_reset_token(user_id: str) -> str:
-    """Create a short-lived JWT password reset token.
 
-    Payload claims:
-      sub   — user_id (stable identifier)
-      type  — "password_reset" (guards against using other token types)
-      exp   — expiry timestamp (15 minutes by default)
-      iat   — issued-at timestamp
-    """
-    settings = get_settings()
-    now = datetime.now(UTC)
-    expire = now + timedelta(minutes=15)  # 15-minute expiry for security
-    payload = {
-        "sub": user_id,
-        "type": _PASSWORD_RESET_TOKEN_TYPE,
-        "iat": now,
-        "exp": expire,
-    }
-    return encode(
-        payload,
-        settings.jwt_secret_key.get_secret_value(),
-        algorithm=settings.jwt_algorithm,
-    )
-
-
-def decode_password_reset_token(token: str) -> dict:
-    """Decode and validate a password reset token. Returns the full payload on success.
-
-    Raises AuthError if the token is invalid, expired, or not a password reset token.
-    """
-    settings = get_settings()
-    try:
-        payload = decode(
-            token,
-            settings.jwt_secret_key.get_secret_value(),
-            algorithms=[settings.jwt_algorithm],
-        )
-    except JWTError as exc:
-        raise AuthError(f"Invalid or expired password reset token: {exc}") from exc
-
-    if payload.get("type") != _PASSWORD_RESET_TOKEN_TYPE:
-        raise AuthError("Token is not a password reset token")
-
-    if not payload.get("sub"):
-        raise AuthError("Password reset token missing 'sub' claim")
-
-    return payload
+# NOTE: Password reset tokens are NOT JWT-based. The reset flow uses opaque
+# URL-safe tokens stored in Redis (see services/password_reset_service.py).
+# create_password_reset_token() and decode_password_reset_token() have been
+# removed — they were dead code never called by any router.

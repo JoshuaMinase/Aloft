@@ -29,7 +29,7 @@ class Poi(BaseModel):
         if len(coords) != 2:
             raise ValueError("location.coordinates must be [longitude, latitude] (2 elements)")
         lng, lat = coords[0], coords[1]
-        if not isinstance(lng, (int, float)) or not isinstance(lat, (int, float)):
+        if not isinstance(lng, int | float) or not isinstance(lat, int | float):
             raise ValueError("location.coordinates must contain numeric values")
         if not (-180 <= lng <= 180):
             raise ValueError(f"longitude {lng} out of range [-180, 180]")

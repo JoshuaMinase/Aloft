@@ -1,18 +1,17 @@
 """
 Email client for sending transactional emails via Resend.
 
-Resend: https://resend.com/ - Free tier: 3,000 emails/month
-Alternative: SendGrid (not implemented here, use email_service.py for both)
+DEPRECATED: Use app.services.email_service instead, which provides:
+- Resend as primary provider
+- SendGrid as fallback
+- Consistent API for all email types
 
-Configuration:
-  - RESEND_API_KEY: Your Resend API key
-  - FROM_EMAIL: The sender email address (must be verified in Resend dashboard)
+This module is kept for backward compatibility but will be removed in a future release.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Any
 
 import httpx
 
@@ -41,14 +40,18 @@ async def send_email(
         EmailError: If email sending fails
     """
     settings = get_settings()
-    api_key = settings.resend_api_key
+    api_key_obj = settings.resend_api_key
     from_email = settings.from_email
 
-    if not api_key:
+    if not api_key_obj:
         raise EmailError(
             "RESEND_API_KEY not configured. Set it in your environment variables. "
             "Get a free key at https://resend.com/"
         )
+
+    api_key = (
+        api_key_obj.get_secret_value() if hasattr(api_key_obj, "get_secret_value") else api_key_obj
+    )
 
     async with httpx.AsyncClient() as client:
         response = await client.post(

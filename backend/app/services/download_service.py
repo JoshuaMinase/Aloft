@@ -23,6 +23,7 @@ class RouteNotFoundError(Exception):
 
 class ZipTooLargeError(Exception):
     """Raised when the assembled ZIP would exceed MAX_ZIP_BYTES."""
+
     pass
 
 
@@ -71,7 +72,7 @@ async def build_download_zip(
             buf.seek(0, 2)
             if buf.tell() > MAX_ZIP_BYTES:
                 raise ZipTooLargeError(
-                    f"ZIP bundle exceeded {MAX_ZIP_BYTES // (1024*1024)}MB limit "
+                    f"ZIP bundle exceeded {MAX_ZIP_BYTES // (1024 * 1024)}MB limit "
                     f"after {len(manifest_entries)} POIs. Run content generation "
                     "for fewer POIs or reduce audio/image count."
                 )

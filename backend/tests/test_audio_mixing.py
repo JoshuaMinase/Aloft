@@ -4,13 +4,25 @@ encode/decode) -- the service itself takes and returns MP3 bytes in
 production, but the mixing logic is identical regardless of container format.
 The service-level AudioMixingError tests use raw bytes to trigger decode
 failures without needing ffmpeg at all.
+
+NOTE: These tests are skipped on Python 3.13+ due to pydub incompatibility
+(audioop module was removed in Python 3.13). They can be re-enabled when
+running on Python 3.12 or when pydub is updated.
 """
 
 from __future__ import annotations
 
 import io
+import sys
 
 import pytest
+
+# Skip all audio mixing tests on Python 3.13+ due to pydub incompatibility
+if sys.version_info >= (3, 13):
+    pytest.skip(
+        "pydub is incompatible with Python 3.13 (audioop module removed)", allow_module_level=True
+    )
+
 from pydub import AudioSegment
 from pydub.generators import Sine
 

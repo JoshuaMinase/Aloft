@@ -10,7 +10,7 @@ Covers:
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import httpx
 import pytest
@@ -18,9 +18,9 @@ import respx
 
 from app.clients.geocoding_client import RegionInfo
 from app.services.region_narration_service import (
-    generate_region_narration,
-    _generate_text,
     OCEAN_FACTS,
+    _generate_text,
+    generate_region_narration,
 )
 
 
@@ -63,13 +63,18 @@ async def test_translates_curated_fact_for_non_english(http_client):
     )
 
     with patch("app.services.region_narration_service.chat_completion") as mock_groq:
-        mock_groq.return_value = "El Atlántico Norte es uno de los corredores aéreos más transitados del mundo."
+        mock_groq.return_value = (
+            "El Atlántico Norte es uno de los corredores aéreos más transitados del mundo."
+        )
 
         result = await _generate_text(http_client, region, "es")
 
         # Should call Groq for translation
         mock_groq.assert_called_once()
-        assert result == "El Atlántico Norte es uno de los corredores aéreos más transitados del mundo."
+        assert (
+            result
+            == "El Atlántico Norte es uno de los corredores aéreos más transitados del mundo."
+        )
 
 
 @pytest.mark.asyncio
@@ -261,6 +266,6 @@ def test_curated_facts_contain_expected_oceans():
 
 def test_curated_facts_are_in_english():
     """All curated facts should be in English for the base version."""
-    for ocean, fact in OCEAN_FACTS.items():
+    for _ocean, fact in OCEAN_FACTS.items():
         assert isinstance(fact, str)
         assert len(fact) > 0

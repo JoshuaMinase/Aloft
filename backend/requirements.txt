@@ -16,7 +16,9 @@ passlib[bcrypt]==1.7.4
 bcrypt==4.0.1
 PyJWT==2.13.0
 email-validator==2.2.0
-python-multipart==0.0.18
+python-multipart==0.0.32
+python-dotenv==1.2.2
+structlog==24.4.0
 
 # Audio processing
 # pydub depends on audioop module which was removed in Python 3.13

@@ -33,18 +33,18 @@ _STATES_URL = "https://opensky-network.org/api/states/all"
 #   4  last_contact, 5 longitude, 6 latitude, 7 baro_altitude,
 #   8  on_ground, 9 velocity, 10 true_track, 11 vertical_rate, ...
 _VALID_STATE = [
-    "4b1806",          # 0  icao24
-    "SWR123  ",        # 1  callsign (padded to 8)
-    "Switzerland",     # 2  origin_country
-    1718000000,        # 3  time_position
-    1718000001,        # 4  last_contact
-    8.5417,            # 5  longitude
-    47.4647,           # 6  latitude
-    10668.0,           # 7  baro_altitude (metres)
-    False,             # 8  on_ground
-    245.0,             # 9  velocity (m/s)
-    92.3,              # 10 true_track (degrees)
-    -2.6,              # 11 vertical_rate (m/s)
+    "4b1806",  # 0  icao24
+    "SWR123  ",  # 1  callsign (padded to 8)
+    "Switzerland",  # 2  origin_country
+    1718000000,  # 3  time_position
+    1718000001,  # 4  last_contact
+    8.5417,  # 5  longitude
+    47.4647,  # 6  latitude
+    10668.0,  # 7  baro_altitude (metres)
+    False,  # 8  on_ground
+    245.0,  # 9  velocity (m/s)
+    92.3,  # 10 true_track (degrees)
+    -2.6,  # 11 vertical_rate (m/s)
 ]
 
 
@@ -68,7 +68,7 @@ def test_parse_state_vector_returns_position_for_valid_vector():
     pos = _parse_state_vector(_VALID_STATE)
     assert pos is not None
     assert pos.icao24 == "4b1806"
-    assert pos.callsign == "SWR123"   # whitespace stripped
+    assert pos.callsign == "SWR123"  # whitespace stripped
     assert pos.latitude == pytest.approx(47.4647)
     assert pos.longitude == pytest.approx(8.5417)
     assert pos.baro_altitude_m == pytest.approx(10668.0)
@@ -92,11 +92,11 @@ def test_parse_state_vector_returns_none_when_lng_is_null():
 
 def test_parse_state_vector_handles_null_optional_fields():
     state = list(_VALID_STATE)
-    state[7] = None   # baro_altitude
-    state[9] = None   # velocity
+    state[7] = None  # baro_altitude
+    state[9] = None  # velocity
     state[10] = None  # true_track
     state[11] = None  # vertical_rate
-    state[8] = None   # on_ground
+    state[8] = None  # on_ground
     pos = _parse_state_vector(state)
     assert pos is not None
     assert pos.baro_altitude_m is None
@@ -147,9 +147,7 @@ async def test_raises_value_error_when_both_icao24_and_callsign(http_client):
 @pytest.mark.asyncio
 @respx.mock
 async def test_returns_position_on_200_with_states(http_client):
-    respx.get(_STATES_URL).mock(
-        return_value=httpx.Response(200, json={"states": [_VALID_STATE]})
-    )
+    respx.get(_STATES_URL).mock(return_value=httpx.Response(200, json={"states": [_VALID_STATE]}))
     pos = await get_aircraft_position(http_client, icao24="4b1806")
     assert isinstance(pos, AircraftPosition)
     assert pos.icao24 == "4b1806"
@@ -180,9 +178,7 @@ async def test_callsign_is_uppercased_and_padded_in_request(http_client):
 @pytest.mark.asyncio
 @respx.mock
 async def test_raises_aircraft_not_found_when_states_is_empty(http_client):
-    respx.get(_STATES_URL).mock(
-        return_value=httpx.Response(200, json={"states": []})
-    )
+    respx.get(_STATES_URL).mock(return_value=httpx.Response(200, json={"states": []}))
     with pytest.raises(AircraftNotFoundError):
         await get_aircraft_position(http_client, icao24="4b1806")
 
@@ -191,9 +187,7 @@ async def test_raises_aircraft_not_found_when_states_is_empty(http_client):
 @respx.mock
 async def test_raises_aircraft_not_found_when_states_key_missing(http_client):
     """states key absent — treated as no results."""
-    respx.get(_STATES_URL).mock(
-        return_value=httpx.Response(200, json={})
-    )
+    respx.get(_STATES_URL).mock(return_value=httpx.Response(200, json={}))
     with pytest.raises(AircraftNotFoundError):
         await get_aircraft_position(http_client, icao24="4b1806")
 
@@ -204,9 +198,7 @@ async def test_raises_aircraft_not_found_when_state_has_no_position(http_client)
     """State vector returned but lat/lng are null."""
     no_pos = list(_VALID_STATE)
     no_pos[6] = None  # lat null
-    respx.get(_STATES_URL).mock(
-        return_value=httpx.Response(200, json={"states": [no_pos]})
-    )
+    respx.get(_STATES_URL).mock(return_value=httpx.Response(200, json={"states": [no_pos]}))
     with pytest.raises(AircraftNotFoundError):
         await get_aircraft_position(http_client, icao24="4b1806")
 
@@ -220,9 +212,7 @@ async def test_raises_aircraft_not_found_when_state_has_no_position(http_client)
 @respx.mock
 async def test_raises_opensky_error_after_retryable_responses(http_client):
     """Three consecutive 429s exhaust retries and raise OpenSkyClientError."""
-    respx.get(_STATES_URL).mock(
-        return_value=httpx.Response(429, text="rate limited")
-    )
+    respx.get(_STATES_URL).mock(return_value=httpx.Response(429, text="rate limited"))
     with pytest.raises(OpenSkyClientError):
         await get_aircraft_position(http_client, icao24="4b1806")
 
@@ -231,9 +221,7 @@ async def test_raises_opensky_error_after_retryable_responses(http_client):
 @respx.mock
 async def test_raises_opensky_error_on_non_retryable_status(http_client):
     """A 401 Unauthorized should raise immediately without retrying."""
-    route = respx.get(_STATES_URL).mock(
-        return_value=httpx.Response(401, text="unauthorized")
-    )
+    route = respx.get(_STATES_URL).mock(return_value=httpx.Response(401, text="unauthorized"))
     with pytest.raises(OpenSkyClientError):
         await get_aircraft_position(http_client, icao24="4b1806")
     # Should not have retried — only one call
