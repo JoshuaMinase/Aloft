@@ -26,10 +26,10 @@ def _wav_bytes(duration_ms: int, sample_rate: int = 44100) -> bytes:
     audio = 0.5 * np.sin(2 * np.pi * 440 * t)
     # Convert to stereo
     audio = np.column_stack([audio, audio])
-    
+
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp:
         temp_path = temp.name
-    
+
     try:
         sf.write(temp_path, audio, sample_rate)
         with open(temp_path, "rb") as f:
@@ -38,7 +38,9 @@ def _wav_bytes(duration_ms: int, sample_rate: int = 44100) -> bytes:
         Path(temp_path).unlink(missing_ok=True)
 
 
-def _wav_file(tmp_path, name: str, duration_ms: int, freq: int = 220, sample_rate: int = 44100) -> str:
+def _wav_file(
+    tmp_path, name: str, duration_ms: int, freq: int = 220, sample_rate: int = 44100
+) -> str:
     """Generate WAV file using numpy/soundfile."""
     path = tmp_path / name
     num_samples = int(duration_ms * sample_rate / 1000)
@@ -47,7 +49,7 @@ def _wav_file(tmp_path, name: str, duration_ms: int, freq: int = 220, sample_rat
     audio = 0.5 * np.sin(2 * np.pi * freq * t)
     # Convert to stereo
     audio = np.column_stack([audio, audio])
-    
+
     sf.write(str(path), audio, sample_rate)
     return str(path)
 
@@ -56,7 +58,7 @@ def _get_audio_duration(bytes_data: bytes) -> float:
     """Get audio duration in seconds from bytes."""
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp:
         temp_path = temp.name
-    
+
     try:
         with open(temp_path, "wb") as f:
             f.write(bytes_data)
@@ -70,12 +72,12 @@ def _get_audio_rms(bytes_data: bytes) -> float:
     """Get RMS level from audio bytes."""
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp:
         temp_path = temp.name
-    
+
     try:
         with open(temp_path, "wb") as f:
             f.write(bytes_data)
         audio, _ = sf.read(temp_path)
-        return np.sqrt(np.mean(audio ** 2))
+        return np.sqrt(np.mean(audio**2))
     finally:
         Path(temp_path).unlink(missing_ok=True)
 
@@ -113,13 +115,13 @@ def test_mix_long_music_is_trimmed(tmp_path):
 def test_mix_reduces_music_volume(tmp_path):
     narration = _wav_bytes(3000)
     music_path = _wav_file(tmp_path, "loud.wav", 3000)
-    
+
     # Get loud music RMS
     loud_rms = _get_audio_rms(_wav_bytes(3000))
 
     mixed_bytes = mix_narration_with_music(narration, music_path)
     mixed_rms = _get_audio_rms(mixed_bytes)
-    
+
     # Mixed audio should be quieter than loud music (allowing for small differences due to narration)
     # The music is reduced by ~18dB, so it should be significantly quieter
     assert mixed_rms < loud_rms * 1.5  # Allow some tolerance for narration contribution

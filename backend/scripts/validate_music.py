@@ -68,11 +68,8 @@ def validate_track(track: MusicTrack, music_dir: Path) -> bool:
         return False
 
     # 4. Channel check
-    if audio.ndim == 1:
-        num_channels = 1
-    else:
-        num_channels = audio.shape[1]
-    
+    num_channels = 1 if audio.ndim == 1 else audio.shape[1]
+
     if num_channels < 1:
         print(f"  [FAIL] {track.title!r}: audio has no channels")
         return False
