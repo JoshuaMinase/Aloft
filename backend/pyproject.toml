@@ -27,4 +27,5 @@ markers = [
 # Skip audio mixing tests until pydub is updated or alternative is found
 filterwarnings = [
     "ignore::DeprecationWarning",
+    "ignore::UserWarning",
 ]

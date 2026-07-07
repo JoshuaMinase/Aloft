@@ -23,6 +23,7 @@ structlog==24.4.0
 # Audio processing
 # pydub depends on audioop module which was removed in Python 3.13
 # For Python 3.13+, we use numpy + soundfile instead
-pydub==0.25.1; python_version < "3.13"
+# Temporarily disabled for all versions to fix CI
+# pydub==0.25.1; python_version < "3.13"
 numpy>=1.24.0
 soundfile>=0.12.0
