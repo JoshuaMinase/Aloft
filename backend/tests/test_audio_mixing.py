@@ -26,7 +26,7 @@ if sys.version_info >= (3, 13):
 from pydub import AudioSegment
 from pydub.generators import Sine
 
-from app.services.audio_mixing import AudioMixingError, _fit_to_duration, mix_narration_with_music
+from app.services.audio_mixing import AudioMixingError, _fit_to_duration_pydub, mix_narration_with_music
 
 
 def _wav_bytes(duration_ms: int, freq: int = 440) -> bytes:
@@ -47,24 +47,24 @@ def _wav_file(tmp_path, name: str, duration_ms: int, freq: int = 220) -> str:
 
 def test_fit_trims_music_longer_than_target():
     music = Sine(220).to_audio_segment(duration=5000)
-    result = _fit_to_duration(music, 2000)
+    result = _fit_to_duration_pydub(music, 2000)
     assert len(result) == 2000
 
 
 def test_fit_loops_music_shorter_than_target():
     music = Sine(220).to_audio_segment(duration=1000)
-    result = _fit_to_duration(music, 3000)
+    result = _fit_to_duration_pydub(music, 3000)
     assert len(result) == 3000
 
 
 def test_fit_returns_silence_for_empty_segment():
-    result = _fit_to_duration(AudioSegment.empty(), 2000)
+    result = _fit_to_duration_pydub(AudioSegment.empty(), 2000)
     assert len(result) == 2000
 
 
 def test_fit_exact_duration_unchanged():
     music = Sine(220).to_audio_segment(duration=2000)
-    result = _fit_to_duration(music, 2000)
+    result = _fit_to_duration_pydub(music, 2000)
     assert len(result) == 2000
 
 
