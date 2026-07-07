@@ -4,13 +4,13 @@ Tests for the live flight tracking endpoint: POST /v1/flights/{flight_iata}/live
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
 import httpx
 import pytest
 import respx
 from fastapi.testclient import TestClient
 from mongomock_motor import AsyncMongoMockClient
-
-from unittest.mock import patch
 
 from app.clients.aviationstack import AVIATIONSTACK_BASE_URL
 from app.core.config import get_settings
@@ -272,7 +272,7 @@ def test_live_track_session_can_be_polled_after_creation(test_client, db, redis)
     # upcoming / region narration calls. Stub those so the smoke test focuses
     # on the wiring (session_id -> position endpoint) without hitting external
     # APIs that respx would otherwise treat as unmocked.
-    from unittest.mock import AsyncMock, patch
+    from unittest.mock import AsyncMock
 
     from app.models.story import Story
 
