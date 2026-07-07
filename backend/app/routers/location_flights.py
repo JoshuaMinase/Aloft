@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
 from motor.motor_asyncio import AsyncIOMotorDatabase
@@ -93,7 +94,10 @@ async def get_nearby_airports_endpoint(
     response_model=RecommendedFlightsResponse,
     summary="Get flight recommendations based on location",
     description="Get recommended flights departing from airports near the user's location. Returns nearby airports with their departing flights.",
-    dependencies=[Depends(flight_lookup_rate_limit()), Depends(require_permission(Permission.LOOKUP_FLIGHT))],
+    dependencies=[
+        Depends(flight_lookup_rate_limit()),
+        Depends(require_permission(Permission.LOOKUP_FLIGHT)),
+    ],
 )
 async def get_flight_recommendations(
     lat: float = Query(..., ge=-90, le=90, description="User's latitude"),

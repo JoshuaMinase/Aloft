@@ -9,7 +9,7 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.clients.aviationstack import AviationStackClientError, get_flights_by_airport
 from app.models.airport import Airport
-from app.services.airport_repository import _STATIC_AIRPORTS, get_cached_airport, save_airport
+from app.services.airport_repository import _STATIC_AIRPORTS
 
 logger = logging.getLogger("aloft.services.location_flight")
 
@@ -63,14 +63,16 @@ async def get_nearby_airports(
     for iata_code, (airport_lat, airport_lng) in _STATIC_AIRPORTS.items():
         distance = haversine_distance(lat, lng, airport_lat, airport_lng)
         if distance <= radius_km:
-            nearby_airports.append({
-                "iata_code": iata_code,
-                "name": iata_code,  # Will be updated if we have full data
-                "lat": airport_lat,
-                "lng": airport_lng,
-                "distance_km": round(distance, 2),
-                "source": "static",
-            })
+            nearby_airports.append(
+                {
+                    "iata_code": iata_code,
+                    "name": iata_code,  # Will be updated if we have full data
+                    "lat": airport_lat,
+                    "lng": airport_lng,
+                    "distance_km": round(distance, 2),
+                    "source": "static",
+                }
+            )
 
     # Check cached airports from database
     cursor = db.airports.find({})
@@ -80,19 +82,23 @@ async def get_nearby_airports(
         distance = haversine_distance(lat, lng, airport.lat, airport.lng)
         if distance <= radius_km:
             # Update if we already have it from static, otherwise add new
-            existing = next((a for a in nearby_airports if a["iata_code"] == airport.iata_code), None)
+            existing = next(
+                (a for a in nearby_airports if a["iata_code"] == airport.iata_code), None
+            )
             if existing:
                 existing["name"] = airport.name
                 existing["source"] = "cached"
             else:
-                nearby_airports.append({
-                    "iata_code": airport.iata_code,
-                    "name": airport.name,
-                    "lat": airport.lat,
-                    "lng": airport.lng,
-                    "distance_km": round(distance, 2),
-                    "source": "cached",
-                })
+                nearby_airports.append(
+                    {
+                        "iata_code": airport.iata_code,
+                        "name": airport.name,
+                        "lat": airport.lat,
+                        "lng": airport.lng,
+                        "distance_km": round(distance, 2),
+                        "source": "cached",
+                    }
+                )
 
     # Sort by distance and limit results
     nearby_airports.sort(key=lambda x: x["distance_km"])
@@ -138,10 +144,11 @@ async def get_recommended_flights(
     for airport in nearby_airports:
         try:
             flights = await get_flights_by_airport(client, airport["iata_code"], limit)
-            
+
             # Filter for active/scheduled flights only
             active_flights = [
-                f for f in flights 
+                f
+                for f in flights
                 if f.flight_status in ["active", "scheduled", "en_route", "landed"]
             ]
 
@@ -161,11 +168,7 @@ async def get_recommended_flights(
                 total_flights += len(active_flights)
                 recommendations.append(airport)
         except AviationStackClientError as exc:
-            logger.warning(
-                "Failed to get flights for airport %s: %s",
-                airport["iata_code"],
-                exc
-            )
+            logger.warning("Failed to get flights for airport %s: %s", airport["iata_code"], exc)
             airport["flights"] = []
             airport["flight_count"] = 0
             airport["error"] = str(exc)
@@ -200,7 +203,7 @@ async def get_flights_by_city(
     # This is a simplified version - in production you'd want a proper city-to-airport mapping
     # For now, we'll search cached airports that contain the city name
     matching_airports = []
-    
+
     cursor = db.airports.find({})
     async for doc in cursor:
         doc.pop("_id", None)
@@ -211,12 +214,14 @@ async def get_flights_by_city(
     # Also check static airports
     for iata_code, (lat, lng) in _STATIC_AIRPORTS.items():
         if city_name.lower() in iata_code.lower():
-            matching_airports.append(Airport(
-                iata_code=iata_code,
-                name=iata_code,
-                lat=lat,
-                lng=lng,
-            ))
+            matching_airports.append(
+                Airport(
+                    iata_code=iata_code,
+                    name=iata_code,
+                    lat=lat,
+                    lng=lng,
+                )
+            )
 
     if not matching_airports:
         return {
@@ -227,10 +232,10 @@ async def get_flights_by_city(
 
     # Use the first matching airport (could be improved to show all)
     airport = matching_airports[0]
-    
+
     try:
         flights = await get_flights_by_airport(client, airport.iata_code, limit)
-        
+
         return {
             "city": city_name,
             "airport": {

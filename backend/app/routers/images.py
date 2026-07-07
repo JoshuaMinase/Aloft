@@ -61,7 +61,10 @@ class PoiImagesResponse(BaseModel):
     "/{source_id}/images",
     response_model=PoiImagesResponse,
     summary="Fetch real photos for a POI",
-    dependencies=[Depends(image_retrieval_rate_limit()), Depends(require_permission(Permission.READ_POI))],
+    dependencies=[
+        Depends(image_retrieval_rate_limit()),
+        Depends(require_permission(Permission.READ_POI)),
+    ],
 )
 async def fetch_images(
     source_id: str,

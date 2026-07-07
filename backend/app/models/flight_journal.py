@@ -1,5 +1,7 @@
 from __future__ import annotations
+
 from datetime import UTC, datetime
+
 from pydantic import BaseModel, Field
 
 

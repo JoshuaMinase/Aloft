@@ -66,9 +66,7 @@ async def run_worker(
             logger.info("Content worker supervisor received cancellation — shutting down")
             raise
         except Exception:
-            logger.exception(
-                "Content worker loop exited unexpectedly — restarting in 10 seconds"
-            )
+            logger.exception("Content worker loop exited unexpectedly — restarting in 10 seconds")
             await asyncio.sleep(10)
 
 

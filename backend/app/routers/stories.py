@@ -35,7 +35,10 @@ class StoryResponse(BaseModel):
     "/{source_id}/story",
     response_model=StoryResponse,
     summary="Generate a narration story for a POI",
-    dependencies=[Depends(story_generation_rate_limit()), Depends(require_permission(Permission.CREATE_CONTENT))],
+    dependencies=[
+        Depends(story_generation_rate_limit()),
+        Depends(require_permission(Permission.CREATE_CONTENT)),
+    ],
 )
 async def create_story(
     source_id: str = Path(..., max_length=200, description="POI source ID, e.g. `wikipedia:12345`"),

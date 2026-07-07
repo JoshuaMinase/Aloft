@@ -71,7 +71,9 @@ async def test_start_content_generation_creates_job(mongomock_db, mock_redis):
     with patch("app.routers.content.get_redis", return_value=mock_redis):
         from app.routers.content import start_content_generation
 
-        result = await start_content_generation(bundle.route_key, "en", mongomock_db, mock_redis, _FAKE_USER)
+        result = await start_content_generation(
+            bundle.route_key, "en", mongomock_db, mock_redis, _FAKE_USER
+        )
 
     assert result.job_id is not None
     assert result.route_key == bundle.route_key

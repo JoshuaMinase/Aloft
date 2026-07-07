@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 from mongomock_motor import AsyncMongoMockClient
 
 from app.clients.wikipedia import WIKIPEDIA_API_URL
+from app.core.config import get_settings
 from app.core.db import ensure_indexes
 from app.core.dependencies import get_database, get_http_client
 from app.main import app
@@ -35,6 +36,21 @@ FIXED_RESPONSE = {
 @pytest.fixture(autouse=True)
 def no_real_sleep():
     with patch("app.clients.wikipedia.asyncio.sleep", new=AsyncMock()):
+        yield
+
+
+@pytest.fixture(autouse=True)
+def disable_optional_poi_sources():
+    """Disable geonames/wikidata/overpass so tests don't need to mock those URLs."""
+    _base = get_settings()
+    _patched = _base.model_copy(
+        update={
+            "poi_source_geonames_enabled": False,
+            "poi_source_wikidata_enabled": False,
+            "poi_source_overpass_enabled": False,
+        }
+    )
+    with patch("app.services.poi_service.get_settings", return_value=_patched):
         yield
 
 

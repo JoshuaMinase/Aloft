@@ -19,6 +19,6 @@ class Airport(BaseModel):
         # Add GeoJSON location for geospatial queries
         data["location"] = {
             "type": "Point",
-            "coordinates": [self.lng, self.lat]  # GeoJSON uses [longitude, latitude]
+            "coordinates": [self.lng, self.lat],  # GeoJSON uses [longitude, latitude]
         }
         return data

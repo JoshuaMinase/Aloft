@@ -42,21 +42,29 @@ async def fake_redis():
 
 async def test_allows_requests_under_the_limit(fake_redis):
     for _ in range(3):
-        await check_rate_limit(fake_redis, "test-key", max_requests=5, window_seconds=60, algorithm=_ALG)
+        await check_rate_limit(
+            fake_redis, "test-key", max_requests=5, window_seconds=60, algorithm=_ALG
+        )
     # No exception raised -- all 3 requests, under the limit of 5, succeeded.
 
 
 async def test_raises_once_the_limit_is_exceeded(fake_redis):
     for _ in range(3):
-        await check_rate_limit(fake_redis, "test-key", max_requests=3, window_seconds=60, algorithm=_ALG)
+        await check_rate_limit(
+            fake_redis, "test-key", max_requests=3, window_seconds=60, algorithm=_ALG
+        )
 
     with pytest.raises(RateLimitExceeded):
-        await check_rate_limit(fake_redis, "test-key", max_requests=3, window_seconds=60, algorithm=_ALG)
+        await check_rate_limit(
+            fake_redis, "test-key", max_requests=3, window_seconds=60, algorithm=_ALG
+        )
 
 
 async def test_different_keys_have_independent_limits(fake_redis):
     for _ in range(3):
-        await check_rate_limit(fake_redis, "key-a", max_requests=3, window_seconds=60, algorithm=_ALG)
+        await check_rate_limit(
+            fake_redis, "key-a", max_requests=3, window_seconds=60, algorithm=_ALG
+        )
 
     # key-b has never been called -- should still be allowed, completely
     # independent of key-a's exhausted limit.
@@ -64,17 +72,23 @@ async def test_different_keys_have_independent_limits(fake_redis):
 
 
 async def test_window_actually_expires_and_resets_the_count(fake_redis):
-    await check_rate_limit(fake_redis, "test-key", max_requests=1, window_seconds=60, algorithm=_ALG)
+    await check_rate_limit(
+        fake_redis, "test-key", max_requests=1, window_seconds=60, algorithm=_ALG
+    )
 
     with pytest.raises(RateLimitExceeded):
-        await check_rate_limit(fake_redis, "test-key", max_requests=1, window_seconds=60, algorithm=_ALG)
+        await check_rate_limit(
+            fake_redis, "test-key", max_requests=1, window_seconds=60, algorithm=_ALG
+        )
 
     # Manually expire the key to simulate the window passing, rather than
     # actually sleeping 60s in a test.
     await fake_redis.delete("test-key")
 
     # Should succeed again now that the "window" has reset.
-    await check_rate_limit(fake_redis, "test-key", max_requests=1, window_seconds=60, algorithm=_ALG)
+    await check_rate_limit(
+        fake_redis, "test-key", max_requests=1, window_seconds=60, algorithm=_ALG
+    )
 
 
 async def test_expiry_is_only_set_on_the_first_request_in_a_window(fake_redis):
@@ -87,10 +101,14 @@ async def test_expiry_is_only_set_on_the_first_request_in_a_window(fake_redis):
     (the sorted-set key has its TTL reset to window_seconds on every write).
     This test only verifies that the TTL does not grow *beyond* window_seconds.
     """
-    await check_rate_limit(fake_redis, "test-key", max_requests=10, window_seconds=100, algorithm=_ALG)
+    await check_rate_limit(
+        fake_redis, "test-key", max_requests=10, window_seconds=100, algorithm=_ALG
+    )
     ttl_after_first = await fake_redis.ttl("test-key")
 
-    await check_rate_limit(fake_redis, "test-key", max_requests=10, window_seconds=100, algorithm=_ALG)
+    await check_rate_limit(
+        fake_redis, "test-key", max_requests=10, window_seconds=100, algorithm=_ALG
+    )
     ttl_after_second = await fake_redis.ttl("test-key")
 
     # The TTL should never exceed the configured window length.
@@ -109,6 +127,7 @@ async def test_fails_open_when_redis_call_raises():
     # time() returns a valid value (not a redis error) so we get a real timestamp.
     # The pipeline execute is what raises the connection error.
     import time as _time
+
     broken_client.time = AsyncMock(return_value=(_time.time(), 0))
     # Simulate the pipeline execute raising a RedisError
     mock_pipe = AsyncMock()
@@ -121,13 +140,19 @@ async def test_fails_open_when_redis_call_raises():
 
     # Should not raise RateLimitExceeded OR propagate the RedisError
     # -- a Redis outage should never take the whole app down with it.
-    await check_rate_limit(broken_client, "test-key", max_requests=1, window_seconds=60, algorithm=_ALG)
+    await check_rate_limit(
+        broken_client, "test-key", max_requests=1, window_seconds=60, algorithm=_ALG
+    )
 
 
 async def test_rate_limit_exceeded_carries_a_sensible_retry_after(fake_redis):
-    await check_rate_limit(fake_redis, "test-key", max_requests=1, window_seconds=60, algorithm=_ALG)
+    await check_rate_limit(
+        fake_redis, "test-key", max_requests=1, window_seconds=60, algorithm=_ALG
+    )
 
     with pytest.raises(RateLimitExceeded) as exc_info:
-        await check_rate_limit(fake_redis, "test-key", max_requests=1, window_seconds=60, algorithm=_ALG)
+        await check_rate_limit(
+            fake_redis, "test-key", max_requests=1, window_seconds=60, algorithm=_ALG
+        )
 
     assert 0 < exc_info.value.retry_after_seconds <= 60

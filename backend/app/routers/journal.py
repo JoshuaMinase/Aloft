@@ -1,13 +1,12 @@
 from __future__ import annotations
+
 from fastapi import APIRouter, Depends, HTTPException
 from motor.motor_asyncio import AsyncIOMotorDatabase
-from pydantic import BaseModel
+
 from app.core.dependencies import get_current_user, get_database
 from app.models.flight_journal import FlightJournalEntry
 from app.models.user import User
-from app.services.flight_journal_service import (
-    get_flight_history, get_user_stats
-)
+from app.services.flight_journal_service import get_flight_history, get_user_stats
 
 router = APIRouter(prefix="/journal", tags=["journal"])
 
@@ -42,10 +41,12 @@ async def get_share_card_data(
     """Returns structured data for generating a share card on the frontend.
     Frontend renders this as an image. No image generation API needed.
     """
-    doc = await db.flight_journal.find_one({
-        "entry_id": entry_id,
-        "user_id": current_user.user_id,
-    })
+    doc = await db.flight_journal.find_one(
+        {
+            "entry_id": entry_id,
+            "user_id": current_user.user_id,
+        }
+    )
     if doc is None:
         raise HTTPException(status_code=404, detail="Flight not found")
     doc.pop("_id", None)

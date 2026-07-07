@@ -1,9 +1,12 @@
 from __future__ import annotations
+
 import uuid
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, HTTPException
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pydantic import BaseModel
-from datetime import datetime
+
 from app.core.dependencies import get_current_user, get_database
 from app.models.upcoming_flight import UpcomingFlight
 from app.models.user import User
@@ -43,10 +46,14 @@ async def list_upcoming_flights(
     current_user: User = Depends(get_current_user),
 ):
     from datetime import UTC
-    cursor = db.upcoming_flights.find({
-        "user_id": current_user.user_id,
-        "departure_time": {"$gte": datetime.now(UTC)},
-    }, sort=[("departure_time", 1)])
+
+    cursor = db.upcoming_flights.find(
+        {
+            "user_id": current_user.user_id,
+            "departure_time": {"$gte": datetime.now(UTC)},
+        },
+        sort=[("departure_time", 1)],
+    )
     flights = []
     async for doc in cursor:
         doc.pop("_id", None)
@@ -60,10 +67,12 @@ async def cancel_upcoming_flight(
     db: AsyncIOMotorDatabase = Depends(get_database),
     current_user: User = Depends(get_current_user),
 ):
-    result = await db.upcoming_flights.delete_one({
-        "flight_id": flight_id,
-        "user_id": current_user.user_id,
-    })
+    result = await db.upcoming_flights.delete_one(
+        {
+            "flight_id": flight_id,
+            "user_id": current_user.user_id,
+        }
+    )
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Flight not found")
     return {"message": "Flight removed"}

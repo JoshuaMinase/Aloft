@@ -84,9 +84,7 @@ async def check_rate_limit(
     except redis.RedisError:
         # Fail open: a Redis error during enforcement must not block the
         # request -- rate limiting is a protection layer, never a hard gate.
-        logger.exception(
-            "Rate limiter Redis call failed for key=%s -- failing open", key
-        )
+        logger.exception("Rate limiter Redis call failed for key=%s -- failing open", key)
         return
 
 
@@ -207,9 +205,7 @@ end
 redis.call('DECR', tokens_key)
 return current - 1
 """
-    remaining = await redis_client.eval(
-        _LUA_TOKEN_BUCKET, 1, key, max_requests, window_seconds
-    )
+    remaining = await redis_client.eval(_LUA_TOKEN_BUCKET, 1, key, max_requests, window_seconds)
 
     if remaining < 0:
         ttl = await redis_client.ttl(key)

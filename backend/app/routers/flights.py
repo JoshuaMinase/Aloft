@@ -40,7 +40,10 @@ class DiscoverPoisByFlightResponse(BaseModel):
     "/{flight_iata}/pois",
     response_model=DiscoverPoisByFlightResponse,
     summary="Discover POIs for a flight number",
-    dependencies=[Depends(flight_lookup_rate_limit()), Depends(require_permission(Permission.LOOKUP_FLIGHT))],
+    dependencies=[
+        Depends(flight_lookup_rate_limit()),
+        Depends(require_permission(Permission.LOOKUP_FLIGHT)),
+    ],
 )
 async def discover_pois_for_flight(
     flight_iata: str,
@@ -102,9 +105,13 @@ async def discover_pois_for_flight(
         "If the aircraft isn't in ADS-B coverage, the route and POIs "
         "are still returned with position_source='unavailable'."
     ),
-    dependencies=[Depends(flight_lookup_rate_limit()), Depends(require_permission(Permission.LOOKUP_FLIGHT))],
+    dependencies=[
+        Depends(flight_lookup_rate_limit()),
+        Depends(require_permission(Permission.LOOKUP_FLIGHT)),
+    ],
 )
-async def live_track_flight(    flight_iata: str,
+async def live_track_flight(
+    flight_iata: str,
     language: str = Query("en", description="Story language (e.g. en, ar, fr, de)"),
     width_km: float = Query(default=20.0, ge=0.1, le=500.0, description="Corridor width in km"),
     trigger_radius_km: float = Query(

@@ -117,7 +117,7 @@ async def get_flights_by_airport(
         List of FlightInfo objects
     """
     results = await _request(client, "flights", {"dep_iata": dep_iata, "limit": limit})
-    
+
     flights = []
     for flight in results:
         departure_iata = (flight.get("departure") or {}).get("iata")
@@ -140,16 +140,18 @@ async def get_flights_by_airport(
         arrival_scheduled = (flight.get("arrival") or {}).get("scheduled")
         airline_name = (flight.get("airline") or {}).get("name")
 
-        flights.append(FlightInfo(
-            flight_iata=flight.get("flight_iata", ""),
-            departure_iata=departure_iata,
-            arrival_iata=arrival_iata,
-            flight_status=flight.get("flight_status") or "unknown",
-            callsign=callsign,
-            departure_scheduled=departure_scheduled,
-            arrival_scheduled=arrival_scheduled,
-            airline_name=airline_name,
-        ))
+        flights.append(
+            FlightInfo(
+                flight_iata=flight.get("flight_iata", ""),
+                departure_iata=departure_iata,
+                arrival_iata=arrival_iata,
+                flight_status=flight.get("flight_status") or "unknown",
+                callsign=callsign,
+                departure_scheduled=departure_scheduled,
+                arrival_scheduled=arrival_scheduled,
+                airline_name=airline_name,
+            )
+        )
 
     return flights
 

@@ -6,6 +6,7 @@ import pytest
 import respx
 
 from app.clients.wikipedia import WIKIPEDIA_API_URL
+from app.core.config import get_settings
 from app.services.corridor import sample_points_by_spacing
 from app.services.poi_service import _SAMPLE_OVERLAP_FACTOR, find_pois_along_corridor
 
@@ -25,6 +26,21 @@ FIXED_RESPONSE = {
 @pytest.fixture(autouse=True)
 def no_real_sleep():
     with patch("app.clients.wikipedia.asyncio.sleep", new=AsyncMock()):
+        yield
+
+
+@pytest.fixture(autouse=True)
+def disable_optional_poi_sources():
+    """Disable geonames/wikidata/overpass so tests don't need to mock those URLs."""
+    _base = get_settings()
+    _patched = _base.model_copy(
+        update={
+            "poi_source_geonames_enabled": False,
+            "poi_source_wikidata_enabled": False,
+            "poi_source_overpass_enabled": False,
+        }
+    )
+    with patch("app.services.poi_service.get_settings", return_value=_patched):
         yield
 
 

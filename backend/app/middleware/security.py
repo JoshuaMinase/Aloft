@@ -196,7 +196,7 @@ class RateLimitLoggingMiddleware(BaseHTTPMiddleware):
                 user_id: str | None = None
                 auth_header = request.headers.get("authorization", "")
                 if auth_header.startswith("Bearer "):
-                    token = auth_header[len("Bearer "):]
+                    token = auth_header[len("Bearer ") :]
                     try:
                         import jwt
 

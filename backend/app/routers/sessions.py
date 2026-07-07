@@ -45,6 +45,7 @@ from app.models.role import Permission
 from app.models.user import User
 from app.services.audio_repository import get_audio, save_audio
 from app.services.audio_service import get_voice_id_for_language, synthesize_story_audio
+from app.services.corridor import distance_km
 from app.services.destination_tour_service import prepare_destination_tour
 from app.services.flight_session_repository import (
     create_session,
@@ -61,7 +62,6 @@ from app.services.position_tracking_service import (
     find_next_poi_to_narrate,
     find_next_upcoming_poi,
 )
-from app.services.corridor import distance_km
 from app.services.region_narration_service import (
     REGION_NARRATION_COOLDOWN_MINUTES,
     generate_region_narration,
@@ -87,7 +87,6 @@ async def _prefetch_audio(
     try:
         story = await get_story(db, source_id, language)
         if story:
-            settings = get_settings()
             voice_id = get_voice_id_for_language(language)
             audio_bytes = await synthesize_story_audio(
                 story.text_content, language=language, http_client=client
@@ -175,7 +174,10 @@ class PositionUpdateResponse(BaseModel):
     "",
     response_model=StartSessionResponse,
     summary="Start a live flight session",
-    dependencies=[Depends(session_creation_rate_limit()), Depends(require_permission(Permission.CREATE_SESSION))],
+    dependencies=[
+        Depends(session_creation_rate_limit()),
+        Depends(require_permission(Permission.CREATE_SESSION)),
+    ],
 )
 async def start_session(
     body: StartSessionRequest,
@@ -264,7 +266,10 @@ async def start_session(
     "/{session_id}/position",
     response_model=PositionUpdateResponse,
     summary="Send GPS position and get narration trigger",
-    dependencies=[Depends(position_update_rate_limit()), Depends(require_permission(Permission.UPDATE_SESSION))],
+    dependencies=[
+        Depends(position_update_rate_limit()),
+        Depends(require_permission(Permission.UPDATE_SESSION)),
+    ],
 )
 async def update_position(
     session_id: str,
@@ -376,7 +381,7 @@ async def update_position(
                     await save_audio(db, next_poi.source_id, body.language, voice_id, audio_bytes)
             except Exception:
                 pass  # fail silently, text still returned
-        
+
         story = await get_story(db, next_poi.source_id, body.language)
         await record_position_and_narration(redis, session_id, lat, lng, next_poi.source_id)
         return PositionUpdateResponse(
@@ -394,11 +399,13 @@ async def update_position(
 
     # --- Pre-fetch audio for POIs within 50km so it's ready when needed ---
     pois_to_prefetch = [
-        p for p in route_pois
+        p
+        for p in route_pois
         if p.source_id not in already_narrated
-        and distance_km(body.lat, body.lng, 
-                        p.location["coordinates"][1], 
-                        p.location["coordinates"][0]) <= PRE_FETCH_RADIUS_KM
+        and distance_km(
+            body.lat, body.lng, p.location["coordinates"][1], p.location["coordinates"][0]
+        )
+        <= PRE_FETCH_RADIUS_KM
     ]
     for prefetch_poi in pois_to_prefetch[:3]:  # max 3 at once
         settings = get_settings()

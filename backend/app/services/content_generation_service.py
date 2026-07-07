@@ -90,7 +90,7 @@ async def _generate_content_for_one_poi(
 
     images_found = 0
     image_source: Literal["wikipedia", "openverse", ""] | None = ""
-    
+
     # --- Check cache before calling Wikipedia ---
     if poi.image_refs:
         # Images already exist, skip Wikipedia call entirely

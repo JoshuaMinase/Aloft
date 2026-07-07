@@ -121,7 +121,10 @@ class DiscoverPoisResponse(BaseModel):
     "/pois",
     response_model=DiscoverPoisResponse,
     summary="Discover POIs along a flight route",
-    dependencies=[Depends(poi_discovery_rate_limit()), Depends(require_permission(Permission.CREATE_ROUTE))],
+    dependencies=[
+        Depends(poi_discovery_rate_limit()),
+        Depends(require_permission(Permission.CREATE_ROUTE)),
+    ],
 )
 async def discover_pois(
     body: DiscoverPoisRequest,

@@ -175,7 +175,6 @@ async def is_refresh_token_revoked(redis: Redis | None, jti: str) -> bool:
     return await redis.exists(f"{_JTI_BLOCKLIST_PREFIX}{jti}") > 0
 
 
-
 # NOTE: Password reset tokens are NOT JWT-based. The reset flow uses opaque
 # URL-safe tokens stored in Redis (see services/password_reset_service.py).
 # create_password_reset_token() and decode_password_reset_token() have been

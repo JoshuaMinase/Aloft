@@ -76,10 +76,23 @@ async def ensure_indexes(db: AsyncIOMotorDatabase) -> None:
         (db.user_stats, [("user_id", 1)], "user_stats_user_id_unique", {"unique": True}),
         # Favorites indexes
         (db.favorites, [("user_id", 1), ("saved_at", -1)], "favorites_user_saved_at"),
-        (db.favorites, [("user_id", 1), ("poi_source_id", 1)], "favorites_user_poi_unique", {"unique": True}),
+        (
+            db.favorites,
+            [("user_id", 1), ("poi_source_id", 1)],
+            "favorites_user_poi_unique",
+            {"unique": True},
+        ),
         # Upcoming flights indexes
-        (db.upcoming_flights, [("user_id", 1), ("departure_time", 1)], "upcoming_flights_user_departure"),
-        (db.upcoming_flights, [("departure_time", 1), ("notification_sent", 1)], "upcoming_flights_departure_notification"),
+        (
+            db.upcoming_flights,
+            [("user_id", 1), ("departure_time", 1)],
+            "upcoming_flights_user_departure",
+        ),
+        (
+            db.upcoming_flights,
+            [("departure_time", 1), ("notification_sent", 1)],
+            "upcoming_flights_departure_notification",
+        ),
     ]
     failed_indexes: list[str] = []
     for collection, keys, name, *rest in index_defs:
@@ -88,7 +101,9 @@ async def ensure_indexes(db: AsyncIOMotorDatabase) -> None:
             await collection.create_index(keys, name=name, **kwargs)
             logger.debug("Created index %s on %s", name, collection.name)
         except Exception as exc:
-            logger.error("Index %s creation failed on collection %s: %s", name, collection.name, exc)
+            logger.error(
+                "Index %s creation failed on collection %s: %s", name, collection.name, exc
+            )
             failed_indexes.append(name)
 
     if failed_indexes:

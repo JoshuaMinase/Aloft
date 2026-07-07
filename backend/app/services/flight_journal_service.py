@@ -1,18 +1,20 @@
 from __future__ import annotations
+
 import uuid
+
 from motor.motor_asyncio import AsyncIOMotorDatabase
+
 from app.models.flight_journal import FlightJournalEntry, UserStats
 
-
 BADGES = {
-    "first_flight":      lambda s: s.total_flights >= 1,
-    "five_flights":      lambda s: s.total_flights >= 5,
-    "ten_flights":       lambda s: s.total_flights >= 10,
-    "world_traveler":    lambda s: s.total_countries >= 10,
-    "globe_trotter":     lambda s: s.total_countries >= 25,
-    "century_places":    lambda s: s.total_places_narrated >= 100,
-    "long_haul":         lambda s: s.total_distance_km >= 10000,
-    "around_the_world":  lambda s: s.total_distance_km >= 40075,
+    "first_flight": lambda s: s.total_flights >= 1,
+    "five_flights": lambda s: s.total_flights >= 5,
+    "ten_flights": lambda s: s.total_flights >= 10,
+    "world_traveler": lambda s: s.total_countries >= 10,
+    "globe_trotter": lambda s: s.total_countries >= 25,
+    "century_places": lambda s: s.total_places_narrated >= 100,
+    "long_haul": lambda s: s.total_distance_km >= 10000,
+    "around_the_world": lambda s: s.total_distance_km >= 40075,
 }
 
 

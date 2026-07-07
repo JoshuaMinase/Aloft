@@ -16,10 +16,10 @@ from pathlib import Path
 backend_dir = Path(__file__).parent.parent
 sys.path.insert(0, str(backend_dir))
 
-from app.core.config import get_settings
-from app.core.db import connect_to_mongo, close_mongo_connection, get_db
-from app.models.airport import Airport
-from app.services.airport_repository import _STATIC_AIRPORTS
+from app.core.config import get_settings  # noqa: E402
+from app.core.db import close_mongo_connection, connect_to_mongo, get_db  # noqa: E402
+from app.models.airport import Airport  # noqa: E402
+from app.services.airport_repository import _STATIC_AIRPORTS  # noqa: E402
 
 # Enhanced airport data with city and country information
 _AIRPORT_NAMES = {
@@ -118,25 +118,22 @@ _AIRPORT_NAMES = {
 async def seed_airports():
     """Seed the airports collection with static airport data."""
     settings = get_settings()
-    
+
     print(f"Connecting to MongoDB: {settings.mongodb_uri}")
     await connect_to_mongo()
-    
+
     db = get_db()
-    
+
     # Clear existing airports (optional - comment out if you want to keep existing data)
     print("Clearing existing airports collection...")
     await db.airports.delete_many({})
-    
+
     # Prepare airport documents
     airports_to_insert = []
     for iata_code, (lat, lng) in _STATIC_AIRPORTS.items():
         # Get enhanced name data if available
-        if iata_code in _AIRPORT_NAMES:
-            name, city, country = _AIRPORT_NAMES[iata_code]
-        else:
-            name, city, country = iata_code, None, None
-        
+        name, city, country = _AIRPORT_NAMES.get(iata_code, (iata_code, None, None))
+
         airport = Airport(
             iata_code=iata_code,
             name=name,
@@ -146,23 +143,23 @@ async def seed_airports():
             country=country,
         )
         airports_to_insert.append(airport.to_mongo_dict())
-    
+
     # Insert airports
     print(f"Inserting {len(airports_to_insert)} airports...")
     if airports_to_insert:
         result = await db.airports.insert_many(airports_to_insert)
         print(f"Successfully inserted {len(result.inserted_ids)} airports")
-    
+
     # Create geospatial index for location queries
     print("Creating geospatial index...")
     await db.airports.create_index([("location", "2dsphere")])
-    
+
     # Create index for IATA code lookups
     print("Creating IATA code index...")
     await db.airports.create_index([("iata_code", 1)], unique=True)
-    
+
     print("✅ Airport seeding completed successfully!")
-    
+
     await close_mongo_connection()
 
 

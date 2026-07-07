@@ -5,11 +5,14 @@ Uses OneSignal free tier (10,000 notifications/month free).
 """
 
 from __future__ import annotations
+
 import asyncio
 import logging
 from datetime import UTC, datetime, timedelta
+
 import httpx
 from motor.motor_asyncio import AsyncIOMotorDatabase
+
 from app.core.config import get_settings
 
 logger = logging.getLogger("aloft.services.notification_worker")
@@ -36,13 +39,15 @@ async def _check_and_notify(db: AsyncIOMotorDatabase, client: httpx.AsyncClient)
     notify_window_start = now + timedelta(hours=1, minutes=50)
 
     # Find flights departing in ~2 hours that haven't been notified
-    cursor = db.upcoming_flights.find({
-        "departure_time": {
-            "$gte": notify_window_start,
-            "$lte": two_hours_from_now,
-        },
-        "notification_sent": False,
-    })
+    cursor = db.upcoming_flights.find(
+        {
+            "departure_time": {
+                "$gte": notify_window_start,
+                "$lte": two_hours_from_now,
+            },
+            "notification_sent": False,
+        }
+    )
 
     async for doc in cursor:
         user_id = doc["user_id"]
@@ -51,17 +56,14 @@ async def _check_and_notify(db: AsyncIOMotorDatabase, client: httpx.AsyncClient)
         arrival = doc["arrival_iata"]
 
         await _send_push_notification(
-            client, user_id,
+            client,
+            user_id,
             title="Your flight is in 2 hours ✈️",
-            message=(
-                f"{departure} → {arrival} | "
-                f"Download your offline bundle now while on WiFi"
-            ),
+            message=(f"{departure} → {arrival} | Download your offline bundle now while on WiFi"),
         )
 
         await db.upcoming_flights.update_one(
-            {"flight_id": flight_id},
-            {"$set": {"notification_sent": True}}
+            {"flight_id": flight_id}, {"$set": {"notification_sent": True}}
         )
 
 

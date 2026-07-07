@@ -1,8 +1,11 @@
 from __future__ import annotations
+
 import uuid
+
 from fastapi import APIRouter, Depends, HTTPException
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pydantic import BaseModel
+
 from app.core.dependencies import get_current_user, get_database
 from app.models.favorite import FavoritePlace
 from app.models.user import User
@@ -31,10 +34,12 @@ async def add_favorite(
     story = await get_story(db, body.poi_source_id, body.language)
     snippet = story.text_content[:120] if story else None
 
-    existing = await db.favorites.find_one({
-        "user_id": current_user.user_id,
-        "poi_source_id": body.poi_source_id,
-    })
+    existing = await db.favorites.find_one(
+        {
+            "user_id": current_user.user_id,
+            "poi_source_id": body.poi_source_id,
+        }
+    )
     if existing:
         return {"message": "Already in favorites"}
 
@@ -76,10 +81,12 @@ async def remove_favorite(
     current_user: User = Depends(get_current_user),
 ):
     """Remove a place from favorites."""
-    result = await db.favorites.delete_one({
-        "user_id": current_user.user_id,
-        "poi_source_id": poi_source_id,
-    })
+    result = await db.favorites.delete_one(
+        {
+            "user_id": current_user.user_id,
+            "poi_source_id": poi_source_id,
+        }
+    )
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Not in favorites")
     return {"message": "Removed from favorites"}

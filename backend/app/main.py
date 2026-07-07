@@ -22,7 +22,22 @@ from app.middleware.security import (
     RequestLoggingMiddleware,
     SecurityHeadersMiddleware,
 )
-from app.routers import audio, auth, content, favorites, flights, gdpr, images, journal, legal, location_flights, pois, sessions, stories, upcoming_flights
+from app.routers import (
+    audio,
+    auth,
+    content,
+    favorites,
+    flights,
+    gdpr,
+    images,
+    journal,
+    legal,
+    location_flights,
+    pois,
+    sessions,
+    stories,
+    upcoming_flights,
+)
 
 # ---------------------------------------------------------------------------
 # Structured JSON logging (production) / plain text (development)
@@ -130,12 +145,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         db = get_db()
         worker_task = asyncio.create_task(run_worker(redis_client, db, app.state.http_client))
         logger.info("Content generation worker started")
-        
+
         # Start notification worker for pre-flight notifications
         from app.services.notification_worker import run_notification_worker
-        notification_task = asyncio.create_task(
-            run_notification_worker(db, app.state.http_client)
-        )
+
+        notification_task = asyncio.create_task(run_notification_worker(db, app.state.http_client))
         logger.info("Notification worker started")
     else:
         logger.warning("Redis not available -- content generation worker disabled")
@@ -160,7 +174,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
         with contextlib.suppress(asyncio.CancelledError):
             await worker_task
-    
+
     if notification_task is not None:
         notification_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):

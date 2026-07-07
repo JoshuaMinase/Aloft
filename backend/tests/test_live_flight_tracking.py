@@ -10,7 +10,10 @@ import respx
 from fastapi.testclient import TestClient
 from mongomock_motor import AsyncMongoMockClient
 
+from unittest.mock import patch
+
 from app.clients.aviationstack import AVIATIONSTACK_BASE_URL
+from app.core.config import get_settings
 from app.core.dependencies import get_current_user, get_database, get_http_client, get_redis
 from app.main import app
 
@@ -42,11 +45,23 @@ async def redis():
 
 @pytest.fixture
 def test_client(db, redis):
+    # Build a settings object with all optional external POI sources disabled
+    # so tests don't need to mock geonames / wikidata / overpass URLs.
+    _base_settings = get_settings()
+    _test_settings = _base_settings.model_copy(
+        update={
+            "poi_source_geonames_enabled": False,
+            "poi_source_wikidata_enabled": False,
+            "poi_source_overpass_enabled": False,
+        }
+    )
+
     app.dependency_overrides[get_database] = lambda: db
     app.dependency_overrides[get_http_client] = lambda: httpx.AsyncClient()
     app.dependency_overrides[get_redis] = lambda: redis
     app.dependency_overrides[get_current_user] = lambda: _fake_user()
-    yield TestClient(app)
+    with patch("app.services.poi_service.get_settings", return_value=_test_settings):
+        yield TestClient(app)
     app.dependency_overrides.clear()
 
 
@@ -268,7 +283,12 @@ def test_live_track_session_can_be_polled_after_creation(test_client, db, redis)
                 return_value=type(
                     "RegionInfo",
                     (),
-                    {"description": "North Sea", "is_ocean": True, "country": None, "locality": None},
+                    {
+                        "description": "North Sea",
+                        "is_ocean": True,
+                        "country": None,
+                        "locality": None,
+                    },
                 )()
             ),
         ),

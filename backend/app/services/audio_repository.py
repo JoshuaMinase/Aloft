@@ -49,9 +49,10 @@ def _compress_audio(input_bytes: bytes) -> bytes:
     """Compress MP3 to 64kbps — half size, same quality for speech."""
     try:
         result = subprocess.run(
-            ["ffmpeg", "-i", "pipe:0", "-b:a", "64k", 
-             "-f", "mp3", "pipe:1", "-loglevel", "quiet"],
-            input=input_bytes, capture_output=True, timeout=30
+            ["ffmpeg", "-i", "pipe:0", "-b:a", "64k", "-f", "mp3", "pipe:1", "-loglevel", "quiet"],
+            input=input_bytes,
+            capture_output=True,
+            timeout=30,
         )
         if result.returncode == 0 and result.stdout:
             return result.stdout
@@ -108,7 +109,7 @@ async def save_audio(
     backend was used.
     """
     settings = get_settings()
-    
+
     # Compress audio before saving
     audio_bytes = _compress_audio(audio_bytes)
 

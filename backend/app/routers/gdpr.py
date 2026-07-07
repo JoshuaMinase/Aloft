@@ -129,7 +129,10 @@ async def get_user_sessions(db: AsyncIOMotorDatabase, user_id: str) -> list[dict
         "Implements GDPR Right of Access (Article 15). "
         "Includes user profile, generated content, and session history."
     ),
-    dependencies=[Depends(download_rate_limit()), Depends(require_permission(Permission.READ_USER))],
+    dependencies=[
+        Depends(download_rate_limit()),
+        Depends(require_permission(Permission.READ_USER)),
+    ],
 )
 async def export_user_data(
     current_user: User = Depends(get_current_user),

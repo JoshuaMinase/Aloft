@@ -36,7 +36,10 @@ router = APIRouter(prefix="/v1/pois", tags=["audio"])
             "description": "No story found for this POI — generate it first via POST /pois/{source_id}/story"
         },
     },
-    dependencies=[Depends(audio_synthesis_rate_limit()), Depends(require_permission(Permission.CREATE_AUDIO))],
+    dependencies=[
+        Depends(audio_synthesis_rate_limit()),
+        Depends(require_permission(Permission.CREATE_AUDIO)),
+    ],
 )
 async def create_audio(
     source_id: str,
@@ -94,7 +97,10 @@ async def create_audio(
         404: {"description": "No story or audio found for this POI, or music track not found"},
         422: {"description": "Audio mixing failed (corrupt audio or music file)"},
     },
-    dependencies=[Depends(mixed_audio_rate_limit()), Depends(require_permission(Permission.CREATE_AUDIO))],
+    dependencies=[
+        Depends(mixed_audio_rate_limit()),
+        Depends(require_permission(Permission.CREATE_AUDIO)),
+    ],
 )
 async def create_mixed_audio(
     source_id: str,

@@ -46,7 +46,10 @@ class ContentJobStatusResponse(BaseModel):
 @router.post(
     "/{route_key}/content",
     response_model=CreateContentJobResponse,
-    dependencies=[Depends(content_generation_rate_limit()), Depends(require_permission(Permission.CREATE_CONTENT))],
+    dependencies=[
+        Depends(content_generation_rate_limit()),
+        Depends(require_permission(Permission.CREATE_CONTENT)),
+    ],
 )
 async def start_content_generation(
     route_key: str,
@@ -124,7 +127,10 @@ async def get_content_generation_status(
 
 @router.get(
     "/{route_key}/download",
-    dependencies=[Depends(download_rate_limit()), Depends(require_permission(Permission.DOWNLOAD_ROUTE))],
+    dependencies=[
+        Depends(download_rate_limit()),
+        Depends(require_permission(Permission.DOWNLOAD_ROUTE)),
+    ],
 )
 async def download_route_bundle(
     route_key: str,

@@ -182,13 +182,13 @@ async def signup(
         except RuntimeError:
             redis = None
         token = await send_verification_email(redis, user.user_id, user.email)
-        
+
         # In development, log the token for easier testing
         settings = get_settings()
         if settings.environment.lower() == "development":
             logger.info(f"DEV MODE: Verification token for {user.email}: {token}")
             logger.info(f"DEV MODE: Use POST /v1/auth/dev-verify with token: {token}")
-            
+
     except VerificationError as exc:
         # Log the error but don't fail the signup - user can request resend
         logger.warning(f"Failed to send verification email to {user.email}: {exc}")
