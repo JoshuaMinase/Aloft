@@ -378,7 +378,8 @@ async def login(
             detail="Account is deactivated.",
         )
 
-    if not user.is_verified:
+    settings = get_settings()
+    if not user.is_verified and settings.environment.lower() != "development":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Please verify your email address before logging in. Check your inbox for the verification link or request a new one.",

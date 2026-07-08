@@ -133,10 +133,10 @@ class ConfigValidator:
 
     def validate_api_keys(self) -> None:
         """Validate API key configuration."""
+        # Groq and ElevenLabs are always required -- they power the core experience
         required_apis = {
             "GROQ_API_KEY": self.settings.groq_api_key,
             "ELEVENLABS_API_KEY": self.settings.elevenlabs_api_key,
-            "AVIATIONSTACK_API_KEY": self.settings.aviationstack_api_key,
         }
 
         for api_name, api_key in required_apis.items():
@@ -147,6 +147,29 @@ class ConfigValidator:
                     self.warnings.append(
                         f"{api_name} is not configured. Some features may not work."
                     )
+
+        # Flight resolution: at least one of AeroDataBox or AviationStack must be configured.
+        # AeroDataBox is preferred (1 API call vs 3, same free quota).
+        has_aerodatabox = bool(self.settings.aerodatabox_api_key)
+        has_aviationstack = bool(self.settings.aviationstack_api_key)
+
+        if not has_aerodatabox and not has_aviationstack:
+            if self.settings.environment.lower() == "production":
+                self.errors.append(
+                    "At least one flight resolution API key is required in production: "
+                    "AERODATABOX_API_KEY (recommended) or AVIATIONSTACK_API_KEY."
+                )
+            else:
+                self.warnings.append(
+                    "Neither AERODATABOX_API_KEY nor AVIATIONSTACK_API_KEY is configured. "
+                    "Flight number resolution will not work."
+                )
+        elif not has_aerodatabox:
+            self.warnings.append(
+                "AERODATABOX_API_KEY is not configured. "
+                "Flight resolution will use AviationStack (3 API calls per flight vs 1 for AeroDataBox). "
+                "Sign up free at rapidapi.com/aedbx-aedbx/api/aerodatabox"
+            )
 
     def validate_cors(self) -> None:
         """Validate CORS configuration."""

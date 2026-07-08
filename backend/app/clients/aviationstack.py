@@ -10,7 +10,7 @@ from app.core.config import get_settings
 
 logger = logging.getLogger("aloft.clients.aviationstack")
 
-AVIATIONSTACK_BASE_URL = "https://api.aviationstack.com/v1"
+AVIATIONSTACK_BASE_URL = "http://api.aviationstack.com/v1"
 
 _RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 _MAX_ATTEMPTS = 3
@@ -118,12 +118,27 @@ async def get_flights_by_airport(
     """
     results = await _request(client, "flights", {"dep_iata": dep_iata, "limit": limit})
 
+    logger.info("Received %d flights from AviationStack for airport %s", len(results), dep_iata)
+
     flights = []
-    for flight in results:
+    for idx, flight in enumerate(results):
         departure_iata = (flight.get("departure") or {}).get("iata")
         arrival_iata = (flight.get("arrival") or {}).get("iata")
+        flight_iata = flight.get("flight_iata", "").strip()
+        flight_status = flight.get("flight_status", "unknown")
+        
+        logger.debug("Flight %d: IATA=%s, Status=%s, Dep=%s, Arr=%s", 
+                     idx, flight_iata or "MISSING", flight_status, departure_iata, arrival_iata)
+        
+        # Skip flights without valid departure/arrival codes
         if not departure_iata or not arrival_iata:
+            logger.debug("Skipping flight %d: missing departure or arrival IATA", idx)
             continue
+
+        # Generate fallback IATA if missing
+        if not flight_iata:
+            flight_iata = f"{departure_iata}{arrival_iata}"
+            logger.debug("Generated fallback IATA for flight %d: %s", idx, flight_iata)
 
         callsign = None
         flight_icao = flight.get("flight_icao") or flight.get("icao")
@@ -133,7 +148,6 @@ async def get_flights_by_airport(
             airline_data = flight.get("airline") or {}
             airline_icao = airline_data.get("icao")
             if airline_icao:
-                flight_iata = flight.get("flight_iata", "")
                 callsign = f"{airline_icao.strip()}{flight_iata[:3]}".upper()
 
         departure_scheduled = (flight.get("departure") or {}).get("scheduled")
@@ -142,7 +156,7 @@ async def get_flights_by_airport(
 
         flights.append(
             FlightInfo(
-                flight_iata=flight.get("flight_iata", ""),
+                flight_iata=flight_iata,
                 departure_iata=departure_iata,
                 arrival_iata=arrival_iata,
                 flight_status=flight.get("flight_status") or "unknown",
@@ -153,6 +167,7 @@ async def get_flights_by_airport(
             )
         )
 
+    logger.info("Returning %d valid flights for airport %s", len(flights), dep_iata)
     return flights
 
 

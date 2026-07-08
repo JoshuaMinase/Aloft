@@ -45,6 +45,9 @@ class Settings(BaseSettings):
     # client retrying in a loop, or one bad actor, could otherwise burn
     # through a month's AviationStack quota in seconds.
     rate_limit_flight_lookups_per_hour: int = 10
+    # Live tracking has its own higher limit since it's user-triggered (not
+    # background polling) and shares no bucket with recommendations.
+    rate_limit_live_tracking_per_hour: int = 60
     rate_limit_content_generation_per_hour: int = 20
     # Position updates are called every few seconds from the mobile app.
     # 600/min = 10 calls/sec — generous enough for any real polling interval.
@@ -98,6 +101,7 @@ class Settings(BaseSettings):
     elevenlabs_voice_id: str = "EXAVITQu4vr4xnSDxMaL"
     audio_storage_dir: str = "./audio_storage"
     aviationstack_api_key: str | None = None
+    aerodatabox_api_key: str | None = None
 
     # ---------------------------------------------------------------------------
     # Cloudflare R2 audio storage (optional — falls back to local disk when unset)
@@ -135,25 +139,36 @@ class Settings(BaseSettings):
     # dev works out of the box, but will raise an error at startup if
     # ENVIRONMENT=production and the default is still in place.
     jwt_secret_key: SecretStr = SecretStr(_JWT_DEFAULT)
+
+    # ---------------------------------------------------------------------------
+    # Dev-only bypass flags
+    # ---------------------------------------------------------------------------
+    # Set SKIP_EMAIL_VERIFICATION=true in your .env to let unverified accounts
+    # access protected endpoints. NEVER enable this in production — the
+    # _check_production_secrets validator will raise an error if it's set.
+    skip_email_verification: bool = False
     jwt_algorithm: str = "HS256"
     jwt_access_token_expire_minutes: int = 30
     jwt_refresh_token_expire_days: int = 30
 
     @model_validator(mode="after")
     def _check_production_secrets(self) -> "Settings":
-        """Refuse to start in production with the default JWT secret.
+        """Refuse to start in production with the default JWT secret or dev bypass flags.
 
-        This turns a silent security hole into a loud startup crash so it
+        This turns silent security holes into loud startup crashes so they
         can never slip through to a real deployment unnoticed.
         """
-        if (
-            self.environment.lower() == "production"
-            and self.jwt_secret_key.get_secret_value() == _JWT_DEFAULT
-        ):
-            raise ValueError(
-                "JWT_SECRET_KEY must be changed from the default before running in production. "
-                'Generate one with: python -c "import secrets; print(secrets.token_hex(32))"'
-            )
+        if self.environment.lower() == "production":
+            if self.jwt_secret_key.get_secret_value() == _JWT_DEFAULT:
+                raise ValueError(
+                    "JWT_SECRET_KEY must be changed from the default before running in production. "
+                    'Generate one with: python -c "import secrets; print(secrets.token_hex(32))"'
+                )
+            if self.skip_email_verification:
+                raise ValueError(
+                    "SKIP_EMAIL_VERIFICATION must not be enabled in production. "
+                    "Remove it from your environment or set it to false."
+                )
         return self
 
     @model_validator(mode="after")

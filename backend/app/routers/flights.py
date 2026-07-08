@@ -9,6 +9,7 @@ from redis.asyncio import Redis
 from app.clients.aviationstack import AviationStackClientError, FlightNotFoundError
 from app.core.dependencies import (
     flight_lookup_rate_limit,
+    live_tracking_rate_limit,
     get_current_user,
     get_database,
     get_http_client,
@@ -25,6 +26,172 @@ from app.services.poi_service import find_pois_along_corridor
 from app.services.route_bundle_repository import save_route_bundle
 
 router = APIRouter(prefix="/v1/flights", tags=["discovery", "live tracking"])
+
+
+class DiscoverFlightRequest(BaseModel):
+    flightNumber: str | None = None
+    departureCode: str | None = None
+    arrivalCode: str | None = None
+    date: str
+    corridorWidth: float = 100.0
+
+
+class DiscoverFlightResponse(BaseModel):
+    routeKey: str
+    poisCount: int
+    pois: list[dict]
+
+
+import logging as _logging
+
+from app.services.airport_repository import lookup_static_airport
+
+_discover_logger = _logging.getLogger("aloft.routers.flights.discover")
+
+
+@router.post(
+    "/discover",
+    response_model=DiscoverFlightResponse,
+    summary="Discover POIs for a flight (flexible input)",
+    dependencies=[
+        Depends(flight_lookup_rate_limit()),
+        Depends(require_permission(Permission.LOOKUP_FLIGHT)),
+    ],
+)
+async def discover_flight(
+    request: DiscoverFlightRequest,
+    _: User = Depends(get_current_user),
+    client: httpx.AsyncClient = Depends(get_http_client),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+) -> DiscoverFlightResponse:
+    """Discover POIs for a flight using either flight number or airport codes.
+
+    Accepts:
+    - Flight number alone  (e.g. "ET601", "FLYER60", "BA 456")
+    - Airport codes alone  (e.g. ADD → JED)
+    - Flight number + airport codes — airport codes used as fallback if the
+      flight number can't be resolved via AviationStack.
+
+    Resolution order for coordinates:
+      1. AviationStack live lookup (if flight number provided)
+      2. Static airport table (built-in, ~200 airports)
+      3. MongoDB airports collection (previously cached AviationStack responses)
+      4. AviationStack airport lookup (burns one API request per airport)
+    """
+    dep_code = (request.departureCode or "").strip().upper() or None
+    arr_code = (request.arrivalCode or "").strip().upper() or None
+    flight_num = (request.flightNumber or "").strip().upper().replace(" ", "") or None
+
+    if not flight_num and not (dep_code and arr_code):
+        raise HTTPException(
+            status_code=400,
+            detail="Provide a flight number, or both a departure and arrival airport code.",
+        )
+
+    departure: tuple[float, float] | None = None
+    arrival: tuple[float, float] | None = None
+
+    # ── 1. Try resolving via flight number ──────────────────────────────────
+    if flight_num:
+        try:
+            departure, arrival = await resolve_flight_route(client, db, flight_num)
+            _discover_logger.info("Resolved %s → %s / %s", flight_num, departure, arrival)
+        except FlightNotFoundError:
+            _discover_logger.info(
+                "Flight %s not found in AviationStack, trying airport code fallback", flight_num
+            )
+        except AviationStackClientError as exc:
+            _discover_logger.warning("AviationStack error for %s: %s", flight_num, exc)
+
+    # ── 2. Fall back to airport codes ───────────────────────────────────────
+    if (departure is None or arrival is None) and dep_code and arr_code:
+        _discover_logger.info("Resolving coordinates for %s → %s", dep_code, arr_code)
+
+        async def _get_coords(iata: str) -> tuple[float, float] | None:
+            # a) static table
+            coords = lookup_static_airport(iata)
+            if coords:
+                return coords
+            # b) MongoDB cache
+            from app.services.airport_repository import get_cached_airport
+            cached = await get_cached_airport(db, iata)
+            if cached:
+                return (cached.lat, cached.lng)
+            # c) live AviationStack airport lookup
+            try:
+                from app.clients.aviationstack import get_airport
+                info = await get_airport(client, iata)
+                from app.models.airport import Airport
+                from app.services.airport_repository import save_airport
+                await save_airport(db, Airport(iata_code=info.iata_code, name=info.name, lat=info.lat, lng=info.lng))
+                return (info.lat, info.lng)
+            except AviationStackClientError:
+                return None
+
+        dep_coords = await _get_coords(dep_code)
+        arr_coords = await _get_coords(arr_code)
+
+        if dep_coords is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Airport '{dep_code}' not found. Check the IATA code and try again.",
+            )
+        if arr_coords is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Airport '{arr_code}' not found. Check the IATA code and try again.",
+            )
+
+        departure = dep_coords
+        arrival = arr_coords
+
+    if departure is None or arrival is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"Could not resolve route for '{flight_num}'. "
+                "Try entering the departure and arrival airport codes instead."
+            ),
+        )
+
+    # ── 3. Discover POIs ────────────────────────────────────────────────────
+    try:
+        pois = await find_pois_along_corridor(
+            client, departure, arrival, width_km=request.corridorWidth
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    inserted, _ = await save_pois(db, pois)
+    curated_pois = curate_pois(pois, departure, arrival)
+    curated_source_ids = [f"wikipedia:{p.page_id}" for p in curated_pois]
+    bundle = await save_route_bundle(db, departure, arrival, curated_source_ids)
+
+    _discover_logger.info(
+        "Discovery complete: %d POIs found, %d curated, route_key=%s",
+        len(pois), len(curated_pois), bundle.route_key,
+    )
+
+    formatted_pois = [
+        {
+            "id": f"wikipedia:{p.page_id}",
+            "name": p.name,
+            "description": p.summary[:200] if p.summary else "",
+            "lat": p.lat,
+            "lng": p.lng,
+            "country": p.country,
+            "distanceFromPath": p.distance_km,
+            "hasStory": False,
+            "hasAudio": False,
+        }
+        for p in curated_pois
+    ]
+
+    return DiscoverFlightResponse(
+        routeKey=bundle.route_key,
+        poisCount=len(curated_pois),
+        pois=formatted_pois,
+    )
 
 
 class DiscoverPoisByFlightResponse(BaseModel):
@@ -56,11 +223,13 @@ async def discover_pois_for_flight(
 ) -> DiscoverPoisByFlightResponse:
     """Look up a flight's route and discover POIs along the corridor.
 
-    Resolves the flight's departure and arrival airports using AviationStack,
-    then runs the same POI discovery as `POST /routes/pois`.
+    Resolves the flight's departure and arrival airports using AeroDataBox
+    (primary) or AviationStack (fallback), then runs the same POI discovery
+    as `POST /routes/pois`.
 
-    **Rate-limited** (10 requests/hour per IP by default) — AviationStack's
-    free tier caps around 100 requests/month total.
+    **Rate-limited** (10 requests/hour per IP by default). Free tier quota:
+    - AeroDataBox: 500 req/month via RapidAPI (primary, 1 API call per flight)
+    - AviationStack: 500 req/month (fallback, 3 API calls per flight)
 
     Example: `POST /flights/ET308/pois`
     """
@@ -106,7 +275,7 @@ async def discover_pois_for_flight(
         "are still returned with position_source='unavailable'."
     ),
     dependencies=[
-        Depends(flight_lookup_rate_limit()),
+        Depends(live_tracking_rate_limit()),
         Depends(require_permission(Permission.LOOKUP_FLIGHT)),
     ],
 )

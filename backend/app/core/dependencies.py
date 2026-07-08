@@ -39,6 +39,7 @@ falling back to IP for public endpoints.
 
 from __future__ import annotations
 
+import logging
 import httpx
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -54,6 +55,8 @@ from app.models.user import User
 from app.services.auth_service import AuthError, decode_access_token
 from app.services.rate_limiter import RateLimitExceeded, check_rate_limit
 from app.services.user_repository import get_user_by_id
+
+logger = logging.getLogger("aloft.dependencies")
 
 _bearer_scheme = HTTPBearer(auto_error=False)
 
@@ -124,11 +127,19 @@ async def get_current_user(
         )
 
     if not user.is_verified:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Please verify your email address before accessing this resource.",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+        settings = get_settings()
+        if settings.skip_email_verification:
+            logger.warning(
+                "SKIP_EMAIL_VERIFICATION is enabled — bypassing email verification for user %s. "
+                "This is a dev-only setting and must never be used in production.",
+                user_id,
+            )
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Please verify your email address before accessing this resource.",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
 
     return user
 
@@ -238,7 +249,7 @@ async def _get_user_if_authenticated(
 
 
 def flight_lookup_rate_limit():
-    """Rate limit dependency for POST /flights/{flight_iata}/pois.
+    """Rate limit dependency for POST /flights/{flight_iata}/pois and GET /recommendations.
 
     AviationStack's free tier caps around 100 requests/month total.
     Uses IP-based limiting since this endpoint is public.
@@ -249,6 +260,22 @@ def flight_lookup_rate_limit():
         max_requests=settings.rate_limit_flight_lookups_per_hour,
         window_seconds=3600,
         use_user_id=False,
+    )
+
+
+def live_tracking_rate_limit():
+    """Rate limit dependency for POST /flights/{flight_iata}/live.
+
+    Separate bucket from flight_lookup_rate_limit so that background
+    recommendations polling doesn't eat into the user's live-tracking quota.
+    Uses per-user limiting since live tracking is always authenticated.
+    """
+    settings = get_settings()
+    return rate_limit(
+        "live_tracking",
+        max_requests=settings.rate_limit_live_tracking_per_hour,
+        window_seconds=3600,
+        use_user_id=True,
     )
 
 
