@@ -137,7 +137,11 @@ async def get_recommended_flights(
             "total_flights": 0,
         }
 
-    logger.info("Found %d nearby airports: %s", len(nearby_airports), [a["iata_code"] for a in nearby_airports])
+    logger.info(
+        "Found %d nearby airports: %s",
+        len(nearby_airports),
+        [a["iata_code"] for a in nearby_airports],
+    )
 
     # Get flights for each nearby airport
     recommendations = []
@@ -159,10 +163,17 @@ async def get_recommended_flights(
             status_counts = {}
             for f in flights:
                 status_counts[f.flight_status] = status_counts.get(f.flight_status, 0) + 1
-            logger.info("Airport %s: %d total flights, status distribution: %s", 
-                       airport["iata_code"], len(flights), status_counts)
-            logger.info("Airport %s: %d active flights after filtering", 
-                       airport["iata_code"], len(active_flights))
+            logger.info(
+                "Airport %s: %d total flights, status distribution: %s",
+                airport["iata_code"],
+                len(flights),
+                status_counts,
+            )
+            logger.info(
+                "Airport %s: %d active flights after filtering",
+                airport["iata_code"],
+                len(active_flights),
+            )
 
             if active_flights:
                 airport["flights"] = [

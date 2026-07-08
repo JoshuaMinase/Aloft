@@ -40,6 +40,7 @@ falling back to IP for public endpoints.
 from __future__ import annotations
 
 import logging
+
 import httpx
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer

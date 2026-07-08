@@ -126,10 +126,16 @@ async def get_flights_by_airport(
         arrival_iata = (flight.get("arrival") or {}).get("iata")
         flight_iata = flight.get("flight_iata", "").strip()
         flight_status = flight.get("flight_status", "unknown")
-        
-        logger.debug("Flight %d: IATA=%s, Status=%s, Dep=%s, Arr=%s", 
-                     idx, flight_iata or "MISSING", flight_status, departure_iata, arrival_iata)
-        
+
+        logger.debug(
+            "Flight %d: IATA=%s, Status=%s, Dep=%s, Arr=%s",
+            idx,
+            flight_iata or "MISSING",
+            flight_status,
+            departure_iata,
+            arrival_iata,
+        )
+
         # Skip flights without valid departure/arrival codes
         if not departure_iata or not arrival_iata:
             logger.debug("Skipping flight %d: missing departure or arrival IATA", idx)

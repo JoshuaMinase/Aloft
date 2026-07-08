@@ -169,14 +169,13 @@ async def test_resolve_flight_route_uses_aerodatabox_when_configured(db, monkeyp
 
     # Clear config cache after patching env
     from app.core.config import get_settings
+
     get_settings.cache_clear()
 
     async with httpx.AsyncClient() as client:
         with respx.mock:
             # Mock AeroDataBox response
-            aerodatabox_route = respx.get(
-                f"{AERODATABOX_BASE_URL}/flights/number/ET409"
-            ).mock(
+            aerodatabox_route = respx.get(f"{AERODATABOX_BASE_URL}/flights/number/ET409").mock(
                 return_value=httpx.Response(200, json=AERODATABOX_FLIGHT_RESPONSE)
             )
 
@@ -196,20 +195,23 @@ async def test_resolve_flight_route_uses_aerodatabox_when_configured(db, monkeyp
 
 
 @pytest.mark.asyncio
-async def test_resolve_flight_route_falls_back_to_aviationstack_on_aerodatabox_failure(db, monkeypatch):
+async def test_resolve_flight_route_falls_back_to_aviationstack_on_aerodatabox_failure(
+    db, monkeypatch
+):
     """When AeroDataBox fails (e.g. 404), falls back to AviationStack."""
     monkeypatch.setenv("AERODATABOX_API_KEY", "test-rapid-api-key")
     monkeypatch.setenv("AVIATIONSTACK_API_KEY", "test-aviationstack-key")
 
     from app.core.config import get_settings
+
     get_settings.cache_clear()
 
     async with httpx.AsyncClient() as client:
         with respx.mock:
             # AeroDataBox returns 404 (flight not found)
-            aerodatabox_route = respx.get(
-                f"{AERODATABOX_BASE_URL}/flights/number/ET409"
-            ).mock(return_value=httpx.Response(404, json={"error": "Flight not found"}))
+            aerodatabox_route = respx.get(f"{AERODATABOX_BASE_URL}/flights/number/ET409").mock(
+                return_value=httpx.Response(404, json={"error": "Flight not found"})
+            )
 
             # AviationStack should be called as fallback
             respx.get(f"{AVIATIONSTACK_BASE_URL}/flights").mock(
@@ -233,13 +235,12 @@ async def test_resolve_flight_route_caches_airports_from_aerodatabox(db, monkeyp
     monkeypatch.setenv("AERODATABOX_API_KEY", "test-rapid-api-key")
 
     from app.core.config import get_settings
+
     get_settings.cache_clear()
 
     async with httpx.AsyncClient() as client:
         with respx.mock:
-            aerodatabox_route = respx.get(
-                f"{AERODATABOX_BASE_URL}/flights/number/ET409"
-            ).mock(
+            aerodatabox_route = respx.get(f"{AERODATABOX_BASE_URL}/flights/number/ET409").mock(
                 return_value=httpx.Response(200, json=AERODATABOX_FLIGHT_RESPONSE)
             )
 

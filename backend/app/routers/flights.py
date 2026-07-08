@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging as _logging
+
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
 from motor.motor_asyncio import AsyncIOMotorDatabase
@@ -9,15 +11,16 @@ from redis.asyncio import Redis
 from app.clients.aviationstack import AviationStackClientError, FlightNotFoundError
 from app.core.dependencies import (
     flight_lookup_rate_limit,
-    live_tracking_rate_limit,
     get_current_user,
     get_database,
     get_http_client,
     get_redis,
+    live_tracking_rate_limit,
     require_permission,
 )
 from app.models.role import Permission
 from app.models.user import User
+from app.services.airport_repository import lookup_static_airport
 from app.services.flight_resolution import resolve_flight_route
 from app.services.live_flight_service import LiveFlightError, prepare_live_flight_tracking
 from app.services.poi_curator import curate_pois
@@ -41,10 +44,6 @@ class DiscoverFlightResponse(BaseModel):
     poisCount: int
     pois: list[dict]
 
-
-import logging as _logging
-
-from app.services.airport_repository import lookup_static_airport
 
 _discover_logger = _logging.getLogger("aloft.routers.flights.discover")
 
@@ -114,16 +113,22 @@ async def discover_flight(
                 return coords
             # b) MongoDB cache
             from app.services.airport_repository import get_cached_airport
+
             cached = await get_cached_airport(db, iata)
             if cached:
                 return (cached.lat, cached.lng)
             # c) live AviationStack airport lookup
             try:
                 from app.clients.aviationstack import get_airport
+
                 info = await get_airport(client, iata)
                 from app.models.airport import Airport
                 from app.services.airport_repository import save_airport
-                await save_airport(db, Airport(iata_code=info.iata_code, name=info.name, lat=info.lat, lng=info.lng))
+
+                await save_airport(
+                    db,
+                    Airport(iata_code=info.iata_code, name=info.name, lat=info.lat, lng=info.lng),
+                )
                 return (info.lat, info.lng)
             except AviationStackClientError:
                 return None
@@ -169,7 +174,9 @@ async def discover_flight(
 
     _discover_logger.info(
         "Discovery complete: %d POIs found, %d curated, route_key=%s",
-        len(pois), len(curated_pois), bundle.route_key,
+        len(pois),
+        len(curated_pois),
+        bundle.route_key,
     )
 
     formatted_pois = [

@@ -13,61 +13,61 @@ _STATIC_AIRPORTS: dict[str, tuple[float, float]] = {
     # Africa
     "ADD": (8.9779, 38.7993),  # Addis Ababa Bole
     "NSI": (1.1262, 11.5533),  # Nsimalen International (Yaoundé, Cameroon)
-    "DLA": (4.0061, 9.7195),   # Douala International
-    "LFW": (6.1656, 1.2545),   # Lomé-Tokoin
-    "COO": (6.3572, 2.3845),   # Cotonou Cadjehoun
+    "DLA": (4.0061, 9.7195),  # Douala International
+    "LFW": (6.1656, 1.2545),  # Lomé-Tokoin
+    "COO": (6.3572, 2.3845),  # Cotonou Cadjehoun
     "NBO": (-1.3192, 36.9275),  # Nairobi Jomo Kenyatta
     "WIL": (-1.3217, 36.8148),  # Nairobi Wilson
     "JNB": (-26.1392, 28.2460),  # Johannesburg OR Tambo
     "CPT": (-33.9649, 18.6017),  # Cape Town
     "LOS": (6.5774, 3.3216),  # Lagos
-    "ABV": (9.0068, 7.2632),   # Abuja Nnamdi Azikiwe
-    "PHC": (5.0155, 6.9496),   # Port Harcourt
+    "ABV": (9.0068, 7.2632),  # Abuja Nnamdi Azikiwe
+    "PHC": (5.0155, 6.9496),  # Port Harcourt
     "KAN": (12.0476, 8.5237),  # Kano Mallam Aminu
     "CAI": (30.1219, 31.4056),  # Cairo
-    "HRG": (27.1783, 33.7994), # Hurghada
-    "SSH": (27.9773, 34.3950), # Sharm el-Sheikh
+    "HRG": (27.1783, 33.7994),  # Hurghada
+    "SSH": (27.9773, 34.3950),  # Sharm el-Sheikh
     "CMN": (33.3675, -7.5900),  # Casablanca Mohammed V
-    "RAK": (31.6069, -8.0363), # Marrakech Menara
-    "TUN": (36.8510, 10.2272), # Tunis Carthage
+    "RAK": (31.6069, -8.0363),  # Marrakech Menara
+    "TUN": (36.8510, 10.2272),  # Tunis Carthage
     "ALG": (36.6910, 3.2154),  # Algiers Houari Boumediene
     "ABJ": (5.2613, -3.9263),  # Abidjan
     "ACC": (5.6052, -0.1668),  # Accra
     "DAR": (-6.8781, 39.2026),  # Dar es Salaam
     "KGL": (-1.9686, 30.1395),  # Kigali
     "EBB": (0.0424, 32.4435),  # Entebbe
-    "BKO": (12.5335, -7.9499), # Bamako Senou
-    "OUA": (12.3532, -1.5124), # Ouagadougou
-    "HAH": (-11.5337, 43.2719),# Moroni Prince Said Ibrahim
-    "MRU": (-20.4302, 57.6836),# Mauritius Sir Seewoosagur
-    "RUN": (-20.8871, 55.5103),# Réunion Roland Garros
-    "TNR": (-18.7969, 47.4788),# Antananarivo Ivato
-    "MHQ": (-12.8017, 45.2808),# Mayotte Dzaoudzi
-    "DKR": (14.7397, -17.4902),# Dakar Léopold Sédar Senghor
-    "CKY": (9.5769, -13.6120), # Conakry
-    "FNA": (8.6165, -13.1955), # Freetown Lungi
-    "ROB": (6.2337, -10.3623), # Monrovia Roberts
-    "BJL": (13.3380, -16.6522),# Banjul
-    "OXB": (11.8950, -15.6537),# Bissau Osvaldo Vieira
-    "BZV": (-4.2517, 15.2531), # Brazzaville Maya-Maya
-    "FIH": (-4.3857, 15.4446), # Kinshasa N'djili
-    "FBM": (-11.5913, 27.5309),# Lubumbashi
-    "LBV": (0.4586, 9.4123),   # Libreville Leon M'ba
-    "MYC": (10.2496, -67.6494),# — (this is actually Venezuela, skip)
-    "SSG": (3.7527, 8.7087),   # Malabo Santa Isabel
+    "BKO": (12.5335, -7.9499),  # Bamako Senou
+    "OUA": (12.3532, -1.5124),  # Ouagadougou
+    "HAH": (-11.5337, 43.2719),  # Moroni Prince Said Ibrahim
+    "MRU": (-20.4302, 57.6836),  # Mauritius Sir Seewoosagur
+    "RUN": (-20.8871, 55.5103),  # Réunion Roland Garros
+    "TNR": (-18.7969, 47.4788),  # Antananarivo Ivato
+    "MHQ": (-12.8017, 45.2808),  # Mayotte Dzaoudzi
+    "DKR": (14.7397, -17.4902),  # Dakar Léopold Sédar Senghor
+    "CKY": (9.5769, -13.6120),  # Conakry
+    "FNA": (8.6165, -13.1955),  # Freetown Lungi
+    "ROB": (6.2337, -10.3623),  # Monrovia Roberts
+    "BJL": (13.3380, -16.6522),  # Banjul
+    "OXB": (11.8950, -15.6537),  # Bissau Osvaldo Vieira
+    "BZV": (-4.2517, 15.2531),  # Brazzaville Maya-Maya
+    "FIH": (-4.3857, 15.4446),  # Kinshasa N'djili
+    "FBM": (-11.5913, 27.5309),  # Lubumbashi
+    "LBV": (0.4586, 9.4123),  # Libreville Leon M'ba
+    "MYC": (10.2496, -67.6494),  # — (this is actually Venezuela, skip)
+    "SSG": (3.7527, 8.7087),  # Malabo Santa Isabel
     "DOL": (3.8344, 11.5151),  # Douala alt
     "BGF": (4.3985, 18.5188),  # Bangui M'Poko
-    "NDJ": (12.1337, 15.0340), # N'Djamena Hassan Djamous
+    "NDJ": (12.1337, 15.0340),  # N'Djamena Hassan Djamous
     "NIM": (13.4815, 2.1836),  # Niamey Diori Hamani
-    "BKN": (11.8881, -13.3229),# Boké
-    "LUN": (-15.3308, 28.4526),# Lusaka Kenneth Kaunda
-    "HRE": (-17.9318, 31.0928),# Harare Robert Mugabe
-    "BLZ": (-15.6791, 34.9739),# Blantyre Chileka
-    "MZB": (-25.9208, 32.5726),# Maputo
-    "WDH": (-22.4799, 17.4709),# Windhoek Hosea Kutako
-    "GBE": (-24.5553, 25.9182),# Gaborone Sir Seretse Khama
-    "MTS": (-26.5191, 31.1017),# Manzini King Mswati III
-    "MSU": (-29.4623, 27.5525),# Maseru Moshoeshoe
+    "BKN": (11.8881, -13.3229),  # Boké
+    "LUN": (-15.3308, 28.4526),  # Lusaka Kenneth Kaunda
+    "HRE": (-17.9318, 31.0928),  # Harare Robert Mugabe
+    "BLZ": (-15.6791, 34.9739),  # Blantyre Chileka
+    "MZB": (-25.9208, 32.5726),  # Maputo
+    "WDH": (-22.4799, 17.4709),  # Windhoek Hosea Kutako
+    "GBE": (-24.5553, 25.9182),  # Gaborone Sir Seretse Khama
+    "MTS": (-26.5191, 31.1017),  # Manzini King Mswati III
+    "MSU": (-29.4623, 27.5525),  # Maseru Moshoeshoe
     # Middle East
     "DXB": (25.2532, 55.3657),  # Dubai
     "AUH": (24.4430, 54.6511),  # Abu Dhabi
