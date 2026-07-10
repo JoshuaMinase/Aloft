@@ -6,6 +6,7 @@ import logging
 import httpx
 from pydantic import BaseModel
 
+from app.core.api_key_rotation import ApiKeyRotationManager, is_key_exhausted, mark_key_exhausted
 from app.core.config import get_settings
 
 logger = logging.getLogger("aloft.clients.aviationstack")
@@ -16,6 +17,21 @@ _RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 _MAX_ATTEMPTS = 3
 _BACKOFF_BASE_SECONDS = 0.5
 _NON_RETRYABLE_429_CODES = {"usage_limit_reached"}
+
+# Module-level rotation manager cache
+_rotation_manager = None
+
+
+def _get_rotation_manager():
+    """Get or create the API key rotation manager for AviationStack."""
+    global _rotation_manager
+    if _rotation_manager is None:
+        settings = get_settings()
+        api_keys = settings.aviationstack_api_keys
+        if not api_keys:
+            logger.warning("No AviationStack API keys configured for rotation")
+        _rotation_manager = ApiKeyRotationManager("aviationstack", api_keys)
+    return _rotation_manager
 
 
 class FlightInfo(BaseModel):
@@ -179,56 +195,87 @@ async def get_flights_by_airport(
 
 async def _request(client: httpx.AsyncClient, endpoint: str, params: dict) -> list[dict]:
     settings = get_settings()
+    rotation_manager = _get_rotation_manager()
+
+    # Get API keys from rotation manager or fall back to single key
+    api_keys = rotation_manager.api_keys if rotation_manager.api_keys else (
+        [settings.aviationstack_api_key] if settings.aviationstack_api_key else []
+    )
+
+    if not api_keys:
+        raise AviationStackClientError("AVIATIONSTACK_API_KEY is not configured")
+
     url = f"{AVIATIONSTACK_BASE_URL}/{endpoint}"
-    # access_key is passed as a query param (AviationStack's documented method).
-    # We build a sanitised URL for logging that omits the key so it never
-    # appears in structured logs, reverse-proxy access logs, or debug output.
-    full_params = {"access_key": settings.aviationstack_api_key, **params}
-    log_params = {k: v for k, v in params.items()}  # key excluded
+    log_params = {k: v for k, v in params.items()}  # key excluded for logging
     timeout = httpx.Timeout(connect=5.0, read=10.0, write=5.0, pool=5.0)
 
-    last_error: Exception | None = None
-    for attempt in range(1, _MAX_ATTEMPTS + 1):
-        try:
-            response = await client.get(url, params=full_params, timeout=timeout)
-            if response.status_code == 429 and _is_quota_exhausted(response):
-                raise AviationStackClientError(
-                    "AviationStack monthly request quota is exhausted -- "
-                    "retrying won't help until the next billing cycle."
-                )
-            response.raise_for_status()
-        except httpx.TransportError as exc:
-            last_error = exc
-            logger.warning(
-                "AviationStack %s network error, attempt %d/%d: %s (params=%s)",
-                endpoint,
-                attempt,
-                _MAX_ATTEMPTS,
-                exc,
-                log_params,
-            )
-        except httpx.HTTPStatusError as exc:
-            if exc.response.status_code not in _RETRYABLE_STATUS_CODES:
-                raise AviationStackClientError(
-                    f"AviationStack returned non-retryable status {exc.response.status_code} for {endpoint}"
-                ) from exc
-            last_error = exc
-            logger.warning(
-                "AviationStack %s got retryable status %d, attempt %d/%d (params=%s)",
-                endpoint,
-                exc.response.status_code,
-                attempt,
-                _MAX_ATTEMPTS,
-                log_params,
-            )
-        else:
-            return response.json().get("data", [])
+    # Try each available API key
+    for api_key in api_keys:
+        # Skip if this key is marked as exhausted (only when using multiple keys)
+        if len(api_keys) > 1 and is_key_exhausted("aviationstack", api_key):
+            logger.debug("Skipping exhausted AviationStack API key")
+            continue
 
-        if attempt < _MAX_ATTEMPTS:
-            await asyncio.sleep(_BACKOFF_BASE_SECONDS * (2 ** (attempt - 1)))
+        # access_key is passed as a query param (AviationStack's documented method).
+        full_params = {"access_key": api_key, **params}
+
+        last_error: Exception | None = None
+        should_mark_exhausted = False
+
+        for attempt in range(1, _MAX_ATTEMPTS + 1):
+            try:
+                response = await client.get(url, params=full_params, timeout=timeout)
+                if response.status_code == 429 and _is_quota_exhausted(response):
+                    should_mark_exhausted = True
+                    last_error = AviationStackClientError(
+                        "AviationStack monthly request quota is exhausted for this key -- "
+                        "rotating to next key."
+                    )
+                    break
+                response.raise_for_status()
+            except httpx.TransportError as exc:
+                last_error = exc
+                logger.warning(
+                    "AviationStack %s network error, attempt %d/%d: %s (params=%s)",
+                    endpoint,
+                    attempt,
+                    _MAX_ATTEMPTS,
+                    exc,
+                    log_params,
+                )
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code not in _RETRYABLE_STATUS_CODES:
+                    raise AviationStackClientError(
+                        f"AviationStack returned non-retryable status {exc.response.status_code} for {endpoint}"
+                    ) from exc
+                last_error = exc
+                logger.warning(
+                    "AviationStack %s got retryable status %d, attempt %d/%d (params=%s)",
+                    endpoint,
+                    exc.response.status_code,
+                    attempt,
+                    _MAX_ATTEMPTS,
+                    log_params,
+                )
+            else:
+                return response.json().get("data", [])
+
+            if attempt < _MAX_ATTEMPTS:
+                await asyncio.sleep(_BACKOFF_BASE_SECONDS * (2 ** (attempt - 1)))
+
+        # If we got here, this key failed all retries - mark it as exhausted if using rotation
+        # and we encountered quota errors
+        if len(api_keys) > 1 and should_mark_exhausted:
+            logger.warning("Marking AviationStack API key as exhausted after quota errors")
+            mark_key_exhausted("aviationstack", api_key)
+        # Continue to next key if using rotation
+        if len(api_keys) > 1:
+            continue
+        # If not using rotation and key failed, raise error
+        break
 
     raise AviationStackClientError(
-        f"{endpoint} request failed after {_MAX_ATTEMPTS} attempts"
+        f"{endpoint} request failed after trying all API keys"
     ) from last_error
 
 

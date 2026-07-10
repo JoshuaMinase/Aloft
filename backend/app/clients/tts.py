@@ -17,6 +17,7 @@ import logging
 
 import httpx
 
+from app.core.api_key_rotation import ApiKeyRotationManager, is_key_exhausted, mark_key_exhausted
 from app.core.config import get_settings
 
 logger = logging.getLogger("aloft.clients.tts")
@@ -29,6 +30,21 @@ _BASE_URL = "https://api.elevenlabs.io"
 _RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 _MAX_ATTEMPTS = 3
 _BACKOFF_BASE_SECONDS = 1.0
+
+# Module-level rotation manager cache
+_rotation_manager = None
+
+
+def _get_rotation_manager():
+    """Get or create the API key rotation manager for ElevenLabs."""
+    global _rotation_manager
+    if _rotation_manager is None:
+        settings = get_settings()
+        api_keys = settings.elevenlabs_api_keys
+        if not api_keys:
+            logger.warning("No ElevenLabs API keys configured for rotation")
+        _rotation_manager = ApiKeyRotationManager("elevenlabs", api_keys)
+    return _rotation_manager
 
 
 class TtsClientError(Exception):
@@ -60,55 +76,83 @@ async def synthesize_speech(
         TtsClientError: bad API key, invalid voice ID, or retries exhausted.
     """
     settings = get_settings()
+    rotation_manager = _get_rotation_manager()
 
-    api_key = settings.elevenlabs_api_key
-    if api_key is None:
+    # Get API keys from rotation manager or fall back to single key
+    api_keys = rotation_manager.api_keys if rotation_manager.api_keys else (
+        [settings.elevenlabs_api_key.get_secret_value()] if settings.elevenlabs_api_key else []
+    )
+
+    if not api_keys:
         raise TtsClientError("ELEVENLABS_API_KEY is not set. Add it to your .env file.")
 
     resolved_voice_id = voice_id or settings.elevenlabs_voice_id
     url = f"{_BASE_URL}/v1/text-to-speech/{resolved_voice_id}"
 
-    headers = {
-        "xi-api-key": api_key.get_secret_value(),
-        "Content-Type": "application/json",
-        "Accept": "audio/mpeg",
-    }
     payload = {
         "text": text,
         "model_id": "eleven_multilingual_v2",
         "output_format": "mp3_44100_128",
     }
 
-    last_error: Exception | None = None
+    # Try each available API key
+    for api_key in api_keys:
+        # Skip if this key is marked as exhausted (only when using multiple keys)
+        if len(api_keys) > 1 and is_key_exhausted("elevenlabs", api_key):
+            logger.debug("Skipping exhausted ElevenLabs API key")
+            continue
 
-    for attempt in range(1, _MAX_ATTEMPTS + 1):
-        try:
-            response = await http_client.post(url, headers=headers, json=payload, timeout=30.0)
-        except httpx.RequestError as exc:
-            last_error = exc
-            logger.warning("TTS request error, attempt %d/%d: %s", attempt, _MAX_ATTEMPTS, exc)
-        else:
-            if response.status_code == 200:
-                return response.content
+        headers = {
+            "xi-api-key": api_key,
+            "Content-Type": "application/json",
+            "Accept": "audio/mpeg",
+        }
 
-            if response.status_code in _RETRYABLE_STATUS_CODES:
-                last_error = TtsClientError(
-                    f"ElevenLabs returned {response.status_code}: {response.text}"
-                )
-                logger.warning(
-                    "TTS retryable error %d, attempt %d/%d",
-                    response.status_code,
-                    attempt,
-                    _MAX_ATTEMPTS,
-                )
+        last_error: Exception | None = None
+        should_mark_exhausted = False
+
+        for attempt in range(1, _MAX_ATTEMPTS + 1):
+            try:
+                response = await http_client.post(url, headers=headers, json=payload, timeout=30.0)
+            except httpx.RequestError as exc:
+                last_error = exc
+                logger.warning("TTS request error, attempt %d/%d: %s", attempt, _MAX_ATTEMPTS, exc)
             else:
-                # 401, 422, etc. -- won't succeed on retry
-                raise TtsClientError(
-                    f"TTS synthesis failed (non-retryable): "
-                    f"HTTP {response.status_code}: {response.text}"
-                )
+                if response.status_code == 200:
+                    return response.content
 
-        if attempt < _MAX_ATTEMPTS:
-            await asyncio.sleep(_BACKOFF_BASE_SECONDS * (2 ** (attempt - 1)))
+                if response.status_code in _RETRYABLE_STATUS_CODES:
+                    last_error = TtsClientError(
+                        f"ElevenLabs returned {response.status_code}: {response.text}"
+                    )
+                    # Mark as exhausted if we get 429 (rate limit/quota errors)
+                    if response.status_code == 429:
+                        should_mark_exhausted = True
+                    logger.warning(
+                        "TTS retryable error %d, attempt %d/%d",
+                        response.status_code,
+                        attempt,
+                        _MAX_ATTEMPTS,
+                    )
+                else:
+                    # 401, 422, etc. -- won't succeed on retry
+                    raise TtsClientError(
+                        f"TTS synthesis failed (non-retryable): "
+                        f"HTTP {response.status_code}: {response.text}"
+                    )
 
-    raise TtsClientError(f"TTS synthesis failed after {_MAX_ATTEMPTS} attempts") from last_error
+            if attempt < _MAX_ATTEMPTS:
+                await asyncio.sleep(_BACKOFF_BASE_SECONDS * (2 ** (attempt - 1)))
+
+        # If we got here, this key failed all retries - mark it as exhausted if using rotation
+        # and we encountered quota/rate limit errors
+        if len(api_keys) > 1 and should_mark_exhausted:
+            logger.warning("Marking ElevenLabs API key as exhausted after quota/rate limit errors")
+            mark_key_exhausted("elevenlabs", api_key)
+        # Continue to next key if using rotation
+        if len(api_keys) > 1:
+            continue
+        # If not using rotation and key failed, raise error
+        break
+
+    raise TtsClientError(f"TTS synthesis failed after trying all API keys") from last_error

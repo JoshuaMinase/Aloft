@@ -103,6 +103,38 @@ class Settings(BaseSettings):
     aviationstack_api_key: str | None = None
     aerodatabox_api_key: str | None = None
 
+    @property
+    def groq_api_keys(self) -> list[str]:
+        """Parse comma-separated Groq API keys into a list."""
+        if not self.groq_api_key:
+            return []
+        keys = self.groq_api_key.get_secret_value().split(",")
+        return [k.strip() for k in keys if k.strip()]
+
+    @property
+    def elevenlabs_api_keys(self) -> list[str]:
+        """Parse comma-separated ElevenLabs API keys into a list."""
+        if not self.elevenlabs_api_key:
+            return []
+        keys = self.elevenlabs_api_key.get_secret_value().split(",")
+        return [k.strip() for k in keys if k.strip()]
+
+    @property
+    def aviationstack_api_keys(self) -> list[str]:
+        """Parse comma-separated AviationStack API keys into a list."""
+        if not self.aviationstack_api_key:
+            return []
+        keys = self.aviationstack_api_key.split(",")
+        return [k.strip() for k in keys if k.strip()]
+
+    @property
+    def aerodatabox_api_keys(self) -> list[str]:
+        """Parse comma-separated AeroDataBox API keys into a list."""
+        if not self.aerodatabox_api_key:
+            return []
+        keys = self.aerodatabox_api_key.split(",")
+        return [k.strip() for k in keys if k.strip()]
+
     # ---------------------------------------------------------------------------
     # Cloudflare R2 audio storage (optional — falls back to local disk when unset)
     # ---------------------------------------------------------------------------
@@ -218,6 +250,22 @@ class Settings(BaseSettings):
     openverse_client_id: str | None = None
     openverse_client_secret: SecretStr | None = None
 
+    @property
+    def openverse_client_ids(self) -> list[str]:
+        """Parse comma-separated Openverse client IDs into a list."""
+        if not self.openverse_client_id:
+            return []
+        keys = self.openverse_client_id.split(",")
+        return [k.strip() for k in keys if k.strip()]
+
+    @property
+    def openverse_client_secrets(self) -> list[str]:
+        """Parse comma-separated Openverse client secrets into a list."""
+        if not self.openverse_client_secret:
+            return []
+        keys = self.openverse_client_secret.get_secret_value().split(",")
+        return [k.strip() for k in keys if k.strip()]
+
     # ---------------------------------------------------------------------------
     # OpenSky Network (optional — live aircraft position)
     # ---------------------------------------------------------------------------
@@ -226,6 +274,22 @@ class Settings(BaseSettings):
     # Set both fields to get ~4,000 req/day. Leave unset for anonymous (~100 req/day).
     opensky_client_id: str | None = None
     opensky_client_secret: SecretStr | None = None
+
+    @property
+    def opensky_client_ids(self) -> list[str]:
+        """Parse comma-separated OpenSky client IDs into a list."""
+        if not self.opensky_client_id:
+            return []
+        keys = self.opensky_client_id.split(",")
+        return [k.strip() for k in keys if k.strip()]
+
+    @property
+    def opensky_client_secrets(self) -> list[str]:
+        """Parse comma-separated OpenSky client secrets into a list."""
+        if not self.opensky_client_secret:
+            return []
+        keys = self.opensky_client_secret.get_secret_value().split(",")
+        return [k.strip() for k in keys if k.strip()]
 
     # ---------------------------------------------------------------------------
     # POI curation and destination tour settings

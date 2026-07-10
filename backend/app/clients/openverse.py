@@ -32,6 +32,7 @@ import time
 import httpx
 from pydantic import BaseModel
 
+from app.core.api_key_rotation import is_key_exhausted, mark_key_exhausted
 from app.core.config import get_settings
 
 logger = logging.getLogger("aloft.clients.openverse")
@@ -54,11 +55,29 @@ _ALLOWED_LICENCE_SLUGS = {"cc0", "pdm", "by", "by-sa", "by-nc", "by-nc-sa"}
 # Module-level OAuth token cache. Openverse tokens are valid for ~24 hours.
 # Caching avoids a separate token request per search_images() call -- a batch
 # of 20 POIs would otherwise fire 20 token requests for no reason.
-# Structure: {"token": str, "expires_at": float (Unix timestamp)}.
+# Structure: {"token": str, "expires_at": float (Unix timestamp), "credentials": tuple}.
 # Protected by _token_lock to prevent race conditions when multiple coroutines
 # call search_images concurrently before the cache is populated.
 _token_cache: dict | None = None
 _token_lock = asyncio.Lock()
+
+# Module-level rotation manager cache
+_rotation_manager = None
+
+
+def _get_rotation_manager():
+    """Get or create the API key rotation manager for Openverse."""
+    global _rotation_manager
+    if _rotation_manager is None:
+        settings = get_settings()
+        client_ids = settings.openverse_client_ids
+        client_secrets = settings.openverse_client_secrets
+        if not client_ids or not client_secrets:
+            logger.warning("No Openverse credentials configured for rotation")
+        # Pair up client IDs with their corresponding secrets
+        credentials = list(zip(client_ids, client_secrets)) if client_ids and client_secrets else []
+        _rotation_manager = credentials
+    return _rotation_manager
 
 
 class OpenverseImage(BaseModel):
@@ -149,33 +168,71 @@ async def _get_auth_headers(
     """Return Authorization header if OAuth credentials are set; otherwise empty."""
     global _token_cache
 
-    client_id = getattr(settings, "openverse_client_id", None)
-    client_secret = getattr(settings, "openverse_client_secret", None)
+    credentials = _get_rotation_manager()
+    
+    if not credentials or len(credentials) <= 1:
+        # Fall back to single credential behavior
+        client_id = getattr(settings, "openverse_client_id", None)
+        client_secret = getattr(settings, "openverse_client_secret", None)
 
-    if not client_id or not client_secret:
-        # Anonymous access -- 100 req/min limit, fine for low-traffic use
-        return {"User-Agent": f"AloftFlightNarrationApp/0.1 ({settings.app_contact_email})"}
+        if not client_id or not client_secret:
+            # Anonymous access -- 100 req/min limit, fine for low-traffic use
+            return {"User-Agent": f"AloftFlightNarrationApp/0.1 ({settings.app_contact_email})"}
 
-    try:
-        async with _token_lock:
-            now = time.time()
-            # Reuse cached token if it has at least 60 seconds of remaining validity.
-            if _token_cache and _token_cache["expires_at"] > now + 60:
-                token = _token_cache["token"]
-            else:
-                token = await _fetch_oauth_token(
-                    client, client_id, client_secret.get_secret_value()
-                )
-                # Openverse tokens are valid for 24 hours; cache for 23h55m to be safe.
-                _token_cache = {"token": token, "expires_at": now + 86100}
-        return {
-            "Authorization": f"Bearer {token}",
-            "User-Agent": f"AloftFlightNarrationApp/0.1 ({settings.app_contact_email})",
-        }
-    except Exception as exc:
-        logger.warning("Openverse OAuth failed, falling back to anonymous: %s", exc)
-        _token_cache = None  # reset so next call retries rather than replaying a bad token
-        return {"User-Agent": f"AloftFlightNarrationApp/0.1 ({settings.app_contact_email})"}
+        try:
+            async with _token_lock:
+                now = time.time()
+                # Reuse cached token if it has at least 60 seconds of remaining validity.
+                if _token_cache and _token_cache["expires_at"] > now + 60:
+                    token = _token_cache["token"]
+                else:
+                    token = await _fetch_oauth_token(
+                        client, client_id, client_secret.get_secret_value()
+                    )
+                    # Openverse tokens are valid for 24 hours; cache for 23h55m to be safe.
+                    _token_cache = {"token": token, "expires_at": now + 86100, "credentials": (client_id, client_secret.get_secret_value())}
+            return {
+                "Authorization": f"Bearer {token}",
+                "User-Agent": f"AloftFlightNarrationApp/0.1 ({settings.app_contact_email})",
+            }
+        except Exception as exc:
+            logger.warning("Openverse OAuth failed, falling back to anonymous: %s", exc)
+            _token_cache = None  # reset so next call retries rather than replaying a bad token
+            return {"User-Agent": f"AloftFlightNarrationApp/0.1 ({settings.app_contact_email})"}
+    
+    # Try each credential pair with rotation
+    for client_id, client_secret in credentials:
+        # Skip if this credential pair is marked as exhausted
+        if len(credentials) > 1 and is_key_exhausted("openverse", f"{client_id}:{client_secret}"):
+            logger.debug("Skipping exhausted Openverse credentials")
+            continue
+        
+        try:
+            async with _token_lock:
+                now = time.time()
+                # Reuse cached token if it has at least 60 seconds of remaining validity and matches current credentials
+                if (_token_cache and 
+                    _token_cache["expires_at"] > now + 60 and
+                    _token_cache.get("credentials") == (client_id, client_secret)):
+                    token = _token_cache["token"]
+                else:
+                    token = await _fetch_oauth_token(client, client_id, client_secret)
+                    # Openverse tokens are valid for 24 hours; cache for 23h55m to be safe.
+                    _token_cache = {"token": token, "expires_at": now + 86100, "credentials": (client_id, client_secret)}
+            return {
+                "Authorization": f"Bearer {token}",
+                "User-Agent": f"AloftFlightNarrationApp/0.1 ({settings.app_contact_email})",
+            }
+        except Exception as exc:
+            logger.warning("Openverse OAuth failed with credentials %s, trying next: %s", client_id, exc)
+            # Mark these credentials as exhausted if using rotation
+            if len(credentials) > 1:
+                mark_key_exhausted("openverse", f"{client_id}:{client_secret}")
+            continue
+    
+    # All credentials failed, fall back to anonymous
+    logger.warning("All Openverse credentials exhausted, falling back to anonymous access")
+    return {"User-Agent": f"AloftFlightNarrationApp/0.1 ({settings.app_contact_email})"}
 
 
 async def _fetch_oauth_token(client: httpx.AsyncClient, client_id: str, client_secret: str) -> str:

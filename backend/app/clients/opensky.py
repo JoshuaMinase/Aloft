@@ -26,6 +26,7 @@ import time
 import httpx
 from pydantic import BaseModel
 
+from app.core.api_key_rotation import is_key_exhausted, mark_key_exhausted
 from app.core.config import get_settings
 
 logger = logging.getLogger("aloft.clients.opensky")
@@ -40,6 +41,24 @@ _RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 _MAX_ATTEMPTS = 3
 _BACKOFF_BASE_SECONDS = 2.0
 _TOKEN_REFRESH_MARGIN_SECONDS = 60
+
+# Module-level rotation manager cache
+_rotation_manager = None
+
+
+def _get_rotation_manager():
+    """Get or create the API key rotation manager for OpenSky."""
+    global _rotation_manager
+    if _rotation_manager is None:
+        settings = get_settings()
+        client_ids = settings.opensky_client_ids
+        client_secrets = settings.opensky_client_secrets
+        if not client_ids or not client_secrets:
+            logger.warning("No OpenSky credentials configured for rotation")
+        # Pair up client IDs with their corresponding secrets
+        credentials = list(zip(client_ids, client_secrets)) if client_ids and client_secrets else []
+        _rotation_manager = credentials
+    return _rotation_manager
 
 
 class AircraftPosition(BaseModel):
@@ -81,6 +100,7 @@ class _TokenCache:
         self._token: str | None = None
         self._expires_at: float = 0.0
         self._lock = asyncio.Lock()
+        self._current_credentials: tuple[str, str] | None = None
 
     async def get_token(self, client: httpx.AsyncClient) -> str | None:
         """Return a valid Bearer token, or None if client credentials are not set."""
@@ -104,10 +124,50 @@ class _TokenCache:
                 token = await self._fetch_token(client, client_id, client_secret)
                 self._token = token
                 self._expires_at = time.time() + 1800  # OpenSky tokens last ~30 min
+                self._current_credentials = (client_id, client_secret)
                 return self._token
             except Exception as exc:
                 logger.warning("Failed to fetch OpenSky OAuth token: %s", exc)
                 return None
+
+    async def get_token_with_rotation(self, client: httpx.AsyncClient) -> str | None:
+        """Return a valid Bearer token using credential rotation if available."""
+        credentials = _get_rotation_manager()
+        
+        if not credentials or len(credentials) <= 1:
+            # Fall back to single credential behavior
+            return await self.get_token(client)
+        
+        # Try each credential pair
+        for client_id, client_secret in credentials:
+            # Skip if this credential pair is marked as exhausted
+            if len(credentials) > 1 and is_key_exhausted("opensky", f"{client_id}:{client_secret}"):
+                logger.debug("Skipping exhausted OpenSky credentials")
+                continue
+            
+            async with self._lock:
+                now = time.time()
+                # If we have a valid token from current credentials, use it
+                if (self._token and 
+                    now < self._expires_at - _TOKEN_REFRESH_MARGIN_SECONDS and
+                    self._current_credentials == (client_id, client_secret)):
+                    return self._token
+
+                try:
+                    token = await self._fetch_token(client, client_id, client_secret)
+                    self._token = token
+                    self._expires_at = time.time() + 1800
+                    self._current_credentials = (client_id, client_secret)
+                    return token
+                except Exception as exc:
+                    logger.warning("Failed to fetch OpenSky OAuth token with credentials %s: %s", 
+                                client_id, exc)
+                    # Mark these credentials as exhausted if using rotation
+                    if len(credentials) > 1:
+                        mark_key_exhausted("opensky", f"{client_id}:{client_secret}")
+                    continue
+        
+        return None
 
     async def _fetch_token(
         self, client: httpx.AsyncClient, client_id: str, client_secret: str
@@ -133,6 +193,7 @@ class _TokenCache:
         """Drop the cached token (e.g. on 401 from the API)."""
         self._token = None
         self._expires_at = 0.0
+        self._current_credentials = None
 
 
 _token_cache = _TokenCache()
@@ -210,7 +271,7 @@ async def get_aircraft_position(
     if callsign:
         params["callsign"] = callsign.upper().ljust(8)
 
-    token = await _token_cache.get_token(client)
+    token = await _token_cache.get_token_with_rotation(client)
     headers: dict[str, str] = {"User-Agent": "AloftFlightNarrationApp/0.1"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
@@ -230,7 +291,7 @@ async def get_aircraft_position(
         else:
             if response.status_code == 401 and token:
                 _token_cache.invalidate()
-                token = await _token_cache.get_token(client)
+                token = await _token_cache.get_token_with_rotation(client)
                 if token:
                     headers["Authorization"] = f"Bearer {token}"
                     continue
