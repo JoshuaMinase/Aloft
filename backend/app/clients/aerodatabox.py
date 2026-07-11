@@ -139,7 +139,7 @@ async def get_flight(
         # If not using rotation and key failed, raise error
         break
 
-    raise AeroDataBoxClientError(f"Failed after trying all API keys") from last_error
+    raise AeroDataBoxClientError("Failed after trying all API keys") from last_error
 
 
 def _parse_response(response: httpx.Response, flight_iata: str) -> AeroDataBoxFlightInfo:

@@ -28,6 +28,9 @@ async def connect_to_mongo() -> None:
             "connectTimeoutMS": 30000,
             "retryWrites": True,
             "w": "majority",
+            "tls": True,
+            "tlsAllowInvalidCertificates": False,
+            "retryReads": True,
         }
         _client = AsyncIOMotorClient(settings.mongodb_uri, **kwargs)
         _db = _client[settings.mongodb_db_name]

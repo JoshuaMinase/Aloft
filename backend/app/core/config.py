@@ -1,7 +1,10 @@
+import os
 from functools import lru_cache
 
 from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from app.core.secrets import get_secret
 
 _JWT_DEFAULT = "change-me-in-production-use-secrets-token-hex-32"
 
@@ -12,6 +15,9 @@ class Settings(BaseSettings):
     environment: str = "development"
     log_level: str = "INFO"
     app_contact_email: str = "CHANGE_ME@example.com"
+    host: str = "0.0.0.0"
+    port: int = 8000
+    reload: bool = False
     # MongoDB connection - configure via MONGODB_URI environment variable
     # Development default: mongodb://localhost:27017/?directConnection=true
     # Production example: mongodb+srv://user:pass@cluster.mongodb.net/aloft
@@ -191,11 +197,19 @@ class Settings(BaseSettings):
         can never slip through to a real deployment unnoticed.
         """
         if self.environment.lower() == "production":
-            if self.jwt_secret_key.get_secret_value() == _JWT_DEFAULT:
+            # Validate secrets using the secrets module
+            from app.core.secrets import validate_secrets_configured
+            
+            secrets_status = validate_secrets_configured()
+            missing_required = [name for name, is_set in secrets_status.items() 
+                              if not is_set and name in ["JWT_SECRET_KEY", "MONGODB_URI"]]
+            
+            if missing_required:
                 raise ValueError(
-                    "JWT_SECRET_KEY must be changed from the default before running in production. "
-                    'Generate one with: python -c "import secrets; print(secrets.token_hex(32))"'
+                    f"Required secrets not configured: {', '.join(missing_required)}. "
+                    "Use environment variables or configure a secret manager."
                 )
+            
             if self.skip_email_verification:
                 raise ValueError(
                     "SKIP_EMAIL_VERIFICATION must not be enabled in production. "

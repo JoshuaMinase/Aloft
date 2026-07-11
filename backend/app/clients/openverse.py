@@ -75,7 +75,7 @@ def _get_rotation_manager():
         if not client_ids or not client_secrets:
             logger.warning("No Openverse credentials configured for rotation")
         # Pair up client IDs with their corresponding secrets
-        credentials = list(zip(client_ids, client_secrets)) if client_ids and client_secrets else []
+        credentials = list(zip(client_ids, client_secrets, strict=False)) if client_ids and client_secrets else []
         _rotation_manager = credentials
     return _rotation_manager
 

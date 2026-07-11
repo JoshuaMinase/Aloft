@@ -5,19 +5,20 @@ This test verifies that the API key rotation system works correctly
 when services return quota/rate limit errors.
 """
 
-import pytest
-from unittest.mock import Mock, patch, AsyncMock
-import httpx
+from unittest.mock import AsyncMock, Mock, patch
 
-from app.core.api_key_rotation import (
-    ApiKeyRotationManager,
-    mark_key_exhausted,
-    is_key_exhausted,
-    get_available_key,
-    clear_exhausted_status,
-)
+import httpx
+import pytest
+
 from app.clients.groq import GroqClientError, chat_completion
 from app.clients.tts import TtsClientError, synthesize_speech
+from app.core.api_key_rotation import (
+    ApiKeyRotationManager,
+    clear_exhausted_status,
+    get_available_key,
+    is_key_exhausted,
+    mark_key_exhausted,
+)
 
 
 @pytest.fixture
@@ -160,10 +161,10 @@ class TestGroqClientRotation:
                     )
                 ]
                 
-                with patch("app.core.api_key_rotation.is_key_exhausted", return_value=False):
-                    with patch("app.core.api_key_rotation.mark_key_exhausted"):
-                        result = await chat_completion(mock_client, [{"role": "user", "content": "test"}])
-                        assert result == "test response"
+                with patch("app.core.api_key_rotation.is_key_exhausted", return_value=False), \
+                     patch("app.core.api_key_rotation.mark_key_exhausted"):
+                    result = await chat_completion(mock_client, [{"role": "user", "content": "test"}])
+                    assert result == "test response"
 
     async def test_groq_fails_when_all_keys_exhausted(self):
         """Test that Groq client fails when all keys are exhausted."""
@@ -184,10 +185,10 @@ class TestGroqClientRotation:
                     response=Mock(status_code=429, headers=Mock(get=Mock(return_value=None)))
                 )
                 
-                with patch("app.core.api_key_rotation.is_key_exhausted", return_value=False):
-                    with patch("app.core.api_key_rotation.mark_key_exhausted"):
-                        with pytest.raises(GroqClientError):
-                            await chat_completion(mock_client, [{"role": "user", "content": "test"}])
+                with patch("app.core.api_key_rotation.is_key_exhausted", return_value=False), \
+                     patch("app.core.api_key_rotation.mark_key_exhausted"), \
+                     pytest.raises(GroqClientError):
+                    await chat_completion(mock_client, [{"role": "user", "content": "test"}])
 
 
 @pytest.mark.asyncio
@@ -210,10 +211,10 @@ class TestTtsClientRotation:
                     Mock(status_code=200, content=b"audio data")
                 ]
                 
-                with patch("app.core.api_key_rotation.is_key_exhausted", return_value=False):
-                    with patch("app.core.api_key_rotation.mark_key_exhausted"):
-                        result = await synthesize_speech("test text", http_client=mock_client)
-                        assert result == b"audio data"
+                with patch("app.core.api_key_rotation.is_key_exhausted", return_value=False), \
+                     patch("app.core.api_key_rotation.mark_key_exhausted"):
+                    result = await synthesize_speech("test text", http_client=mock_client)
+                    assert result == b"audio data"
 
     async def test_tts_fails_when_all_keys_exhausted(self):
         """Test that TTS client fails when all keys are exhausted."""
@@ -228,10 +229,10 @@ class TestTtsClientRotation:
                 # Both keys fail with 429
                 mock_client.post.return_value = Mock(status_code=429, text="Rate limit exceeded")
                 
-                with patch("app.core.api_key_rotation.is_key_exhausted", return_value=False):
-                    with patch("app.core.api_key_rotation.mark_key_exhausted"):
-                        with pytest.raises(TtsClientError):
-                            await synthesize_speech("test text", http_client=mock_client)
+                with patch("app.core.api_key_rotation.is_key_exhausted", return_value=False), \
+                     patch("app.core.api_key_rotation.mark_key_exhausted"), \
+                     pytest.raises(TtsClientError):
+                    await synthesize_speech("test text", http_client=mock_client)
 
 
 if __name__ == "__main__":

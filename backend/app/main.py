@@ -111,6 +111,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         logger.error("FATAL: Configuration validation failed: %s", exc)
         raise
 
+    # Log secret validation status
+    try:
+        from app.core.secrets import log_secret_validation_results
+        log_secret_validation_results()
+    except Exception as exc:
+        logger.warning("Secret validation check failed: %s", exc)
+
     try:
         await connect_to_mongo()
     except Exception as exc:
@@ -337,3 +344,21 @@ async def health_ready() -> dict:
         return JSONResponse(status_code=503, content={"status": "degraded", **result})
 
     return {"status": "ok", **result}
+
+
+def main() -> None:
+    """Entry point for running the server directly."""
+    import uvicorn
+
+    settings = get_settings()
+    uvicorn.run(
+        "app.main:app",
+        host=settings.host,
+        port=settings.port,
+        reload=settings.reload,
+        log_level=settings.log_level.lower(),
+    )
+
+
+if __name__ == "__main__":
+    main()

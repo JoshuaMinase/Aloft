@@ -157,7 +157,7 @@ async def chat_completion(
         # If not using rotation and key failed, raise error  
         break
 
-    raise GroqClientError(f"chat_completion failed after trying all API keys") from last_error
+    raise GroqClientError("chat_completion failed after trying all API keys") from last_error
 
 
 def _retry_after_seconds(response: httpx.Response) -> float | None:

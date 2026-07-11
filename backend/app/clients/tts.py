@@ -155,4 +155,4 @@ async def synthesize_speech(
         # If not using rotation and key failed, raise error
         break
 
-    raise TtsClientError(f"TTS synthesis failed after trying all API keys") from last_error
+    raise TtsClientError("TTS synthesis failed after trying all API keys") from last_error
