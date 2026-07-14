@@ -27,11 +27,26 @@ def _get_rotation_manager():
     global _rotation_manager
     if _rotation_manager is None:
         settings = get_settings()
-        api_keys = settings.aviationstack_api_keys
+        # Handle both the property (real Settings) and direct attribute (mocked Settings in tests)
+        api_keys = getattr(settings, "aviationstack_api_keys", None)
+        if api_keys is None:
+            # Fallback for tests that mock Settings without the property
+            api_key = settings.aviationstack_api_key
+            api_keys = [api_key] if api_key else []
         if not api_keys:
             logger.warning("No AviationStack API keys configured for rotation")
         _rotation_manager = ApiKeyRotationManager("aviationstack", api_keys)
     return _rotation_manager
+
+
+def reset_rotation_manager_cache() -> None:
+    """Clear the cached rotation manager so it's rebuilt from current settings.
+
+    See app/clients/groq.py's reset_rotation_manager_cache() for why this
+    exists — same module-level-cache-survives-across-tests problem.
+    """
+    global _rotation_manager
+    _rotation_manager = None
 
 
 class FlightInfo(BaseModel):
@@ -271,7 +286,12 @@ async def _request(client: httpx.AsyncClient, endpoint: str, params: dict) -> li
         # Continue to next key if using rotation
         if len(api_keys) > 1:
             continue
-        # If not using rotation and key failed, raise error
+        # If not using rotation and key failed, raise error. Prefer the
+        # specific error we already built (e.g. "quota is exhausted") over
+        # the generic fallback below -- it's more useful for debugging and
+        # was previously being computed and then silently discarded here.
+        if isinstance(last_error, AviationStackClientError):
+            raise last_error
         break
 
     raise AviationStackClientError(

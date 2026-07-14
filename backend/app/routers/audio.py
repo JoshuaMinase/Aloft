@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import os
-
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
@@ -20,6 +18,7 @@ from app.models.user import User
 from app.services.audio_mixing import AudioMixingError, mix_narration_with_music
 from app.services.audio_repository import get_audio, read_audio_bytes, save_audio
 from app.services.audio_service import get_voice_id_for_language, synthesize_story_audio
+from app.services.music_asset_repository import MusicAssetError, resolve_music_file
 from app.services.music_catalog import ALL_TRACK_IDS, get_track
 from app.services.story_repository import get_story
 
@@ -116,8 +115,10 @@ async def create_mixed_audio(
     Background music is drawn from the built-in Mixkit catalog (all Mixkit Free
     License). Use `track_id` to select a track; defaults to "mixkit-feedback-dreams".
 
-    Music tracks must be downloaded locally first — see `scripts/download_music.py`.
-    If the track file is missing, a 404 is returned.
+    Music tracks are fetched from R2 (production) or read from local disk (dev)
+    automatically. If R2 isn't configured and the file isn't available locally,
+    a 404 is returned — configure R2 and run scripts/upload_music_assets_to_r2.py
+    to fix this.
 
     Returns raw MP3 bytes with the narration mixed over a low-volume music bed.
     The mix is NOT cached — call this on-demand for preview; cache the result
@@ -156,15 +157,13 @@ async def create_mixed_audio(
             ),
         )
 
-    music_path = os.path.join("music_assets", track.local_filename)
-    if not os.path.exists(music_path):
+    try:
+        music_path = await resolve_music_file(track)
+    except MusicAssetError as exc:
         raise HTTPException(
             status_code=404,
-            detail=(
-                f"Music file '{track.local_filename}' not found on disk. "
-                "Run scripts/download_music.py to download the music catalog."
-            ),
-        )
+            detail=str(exc),
+        ) from exc
 
     try:
         mixed_bytes = mix_narration_with_music(narration_bytes, music_path)

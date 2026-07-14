@@ -40,11 +40,26 @@ def _get_rotation_manager():
     global _rotation_manager
     if _rotation_manager is None:
         settings = get_settings()
-        api_keys = settings.elevenlabs_api_keys
+        # Handle both the property (real Settings) and direct attribute (mocked Settings in tests)
+        api_keys = getattr(settings, "elevenlabs_api_keys", None)
+        if api_keys is None:
+            # Fallback for tests that mock Settings without the property
+            api_key = settings.elevenlabs_api_key
+            api_keys = [api_key.get_secret_value()] if api_key else []
         if not api_keys:
             logger.warning("No ElevenLabs API keys configured for rotation")
         _rotation_manager = ApiKeyRotationManager("elevenlabs", api_keys)
     return _rotation_manager
+
+
+def reset_rotation_manager_cache() -> None:
+    """Clear the cached rotation manager so it's rebuilt from current settings.
+
+    See app/clients/groq.py's reset_rotation_manager_cache() for why this
+    exists — same module-level-cache-survives-across-tests problem.
+    """
+    global _rotation_manager
+    _rotation_manager = None
 
 
 class TtsClientError(Exception):
@@ -155,4 +170,6 @@ async def synthesize_speech(
         # If not using rotation and key failed, raise error
         break
 
-    raise TtsClientError("TTS synthesis failed after trying all API keys") from last_error
+    raise TtsClientError(
+        f"TTS synthesis failed after {_MAX_ATTEMPTS} attempts across all API keys"
+    ) from last_error

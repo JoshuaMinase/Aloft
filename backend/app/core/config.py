@@ -1,10 +1,7 @@
-import os
 from functools import lru_cache
 
 from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
-
-from app.core.secrets import get_secret
 
 _JWT_DEFAULT = "change-me-in-production-use-secrets-token-hex-32"
 
@@ -99,6 +96,14 @@ class Settings(BaseSettings):
     # 12 hours covers any realistic flight duration with margin.
     session_ttl_seconds: int = 43200
     corridor_width_km: float = 100.0
+
+    # GDPR Article 17 (Right to Erasure) grace period. Deletion is scheduled,
+    # not immediate, so a user who deletes by mistake (or is coerced/hacked)
+    # has a window to cancel via POST /v1/user/data/cancel-deletion.
+    # The gdpr_worker actually purges data once this window elapses.
+    gdpr_deletion_grace_period_hours: int = 48
+    # How often the deletion worker polls for due deletions.
+    gdpr_deletion_worker_interval_seconds: int = 900  # 15 minutes
     groq_api_key: SecretStr | None = None
     groq_model: str = "llama-3.3-70b-versatile"
     elevenlabs_api_key: SecretStr | None = None
@@ -191,25 +196,28 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _check_production_secrets(self) -> "Settings":
-        """Refuse to start in production with the default JWT secret or dev bypass flags.
+        """Refuse to start in production with the default JWT secret, an
+        unconfigured database, or dev bypass flags.
 
         This turns silent security holes into loud startup crashes so they
         can never slip through to a real deployment unnoticed.
         """
         if self.environment.lower() == "production":
-            # Validate secrets using the secrets module
-            from app.core.secrets import validate_secrets_configured
-            
-            secrets_status = validate_secrets_configured()
-            missing_required = [name for name, is_set in secrets_status.items() 
-                              if not is_set and name in ["JWT_SECRET_KEY", "MONGODB_URI"]]
-            
+            missing_required = []
+
+            jwt_value = self.jwt_secret_key.get_secret_value() if self.jwt_secret_key else ""
+            if not jwt_value or jwt_value == _JWT_DEFAULT:
+                missing_required.append("JWT_SECRET_KEY")
+
+            if not self.mongodb_uri or "localhost" in self.mongodb_uri:
+                missing_required.append("MONGODB_URI")
+
             if missing_required:
                 raise ValueError(
                     f"Required secrets not configured: {', '.join(missing_required)}. "
-                    "Use environment variables or configure a secret manager."
+                    "Set them via environment variables (JWT_SECRET_KEY, MONGODB_URI)."
                 )
-            
+
             if self.skip_email_verification:
                 raise ValueError(
                     "SKIP_EMAIL_VERIFICATION must not be enabled in production. "
@@ -234,10 +242,11 @@ class Settings(BaseSettings):
     # ---------------------------------------------------------------------------
     # POI source feature flags
     # ---------------------------------------------------------------------------
-    # Wikipedia is the only live source today. Wikidata and GeoNames are
-    # stubbed out (see app/clients/wikidata.py and app/clients/geonames.py)
-    # and disabled by default -- enable them here when the implementations
-    # are complete.
+    # Wikipedia is the only source enabled by default. Wikidata and GeoNames
+    # clients (app/clients/wikidata.py and app/clients/geonames.py) are fully
+    # implemented and wired into poi_service.py -- they're just off by default
+    # to keep discovery fast and avoid extra API calls until you want the
+    # denser coverage they add. Flip the flags below to enable them.
     #
     # Wikidata: structured metadata (coordinates, type classifications,
     #   description), pulls from the Wikidata Query Service (SPARQL).

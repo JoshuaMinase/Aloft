@@ -231,9 +231,21 @@ class ConfigValidator:
                 self.errors.append("R2_BUCKET_NAME is required when using R2")
         else:
             if self.settings.environment.lower() == "production":
-                self.warnings.append(
-                    "R2 is not configured. Audio files will be stored locally. "
-                    "This is not recommended for production deployments."
+                # This used to be a warning. It's now a hard error because R2
+                # is no longer optional in practice: (1) without it, narration
+                # audio written to local disk is lost on every restart/redeploy
+                # on ephemeral hosting (Render free tier has no persistent
+                # disk), and (2) background music tracks are no longer bundled
+                # in the Docker image (see Dockerfile) and are fetched from R2
+                # on first use -- without R2, POST /pois/{id}/audio/mixed will
+                # 404 for every request.
+                self.errors.append(
+                    "R2 is not configured but ENVIRONMENT=production. R2_ACCOUNT_ID, "
+                    "R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, and R2_BUCKET_NAME are all "
+                    "required in production: generated narration audio is lost on every "
+                    "restart without it (no persistent disk on most free-tier hosting), "
+                    "and background music tracks are fetched from R2 at runtime rather "
+                    "than bundled in the image."
                 )
 
     def validate_email_service(self) -> None:

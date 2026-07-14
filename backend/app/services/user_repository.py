@@ -160,3 +160,24 @@ async def update_user(db: AsyncIOMotorDatabase, user: User) -> None:
         raise ValueError(f"User not found: {user.user_id}")
 
     logger.info("Updated user %s", user.user_id)
+
+
+async def delete_user(db: AsyncIOMotorDatabase, user_id: str) -> bool:
+    """Delete a user by ID.
+
+    Returns True if the user was deleted, False if not found.
+    Used by the GDPR deletion worker to purge accounts after the grace period.
+    """
+    from bson import ObjectId
+    from bson.errors import InvalidId
+
+    try:
+        oid = ObjectId(user_id)
+    except InvalidId:
+        return False
+
+    result = await db.users.delete_one({"_id": oid})
+    deleted = result.deleted_count > 0
+    if deleted:
+        logger.warning("Deleted user %s", user_id)
+    return deleted

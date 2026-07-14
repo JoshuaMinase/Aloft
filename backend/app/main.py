@@ -144,6 +144,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Start background content worker if Redis is available
     worker_task = None
     notification_task = None
+    gdpr_deletion_task = None
     redis_client = get_optional_redis()
     if redis_client is not None:
         from app.core.db import get_db
@@ -158,6 +159,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
         notification_task = asyncio.create_task(run_notification_worker(db, app.state.http_client))
         logger.info("Notification worker started")
+
+        # Start GDPR deletion worker for scheduled account purges
+        from app.services.gdpr_worker import run_gdpr_deletion_worker
+
+        gdpr_deletion_task = asyncio.create_task(run_gdpr_deletion_worker(db, redis_client))
+        logger.info("GDPR deletion worker started")
     else:
         logger.warning("Redis not available -- content generation worker disabled")
 
@@ -186,6 +193,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         notification_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await notification_task
+
+    if gdpr_deletion_task is not None:
+        gdpr_deletion_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await gdpr_deletion_task
 
     await app.state.http_client.aclose()
     await close_redis_connection()

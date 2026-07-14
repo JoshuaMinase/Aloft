@@ -27,6 +27,8 @@ from __future__ import annotations
 
 import pytest
 
+from app.clients import aerodatabox, aviationstack, groq, opensky, openverse, tts
+from app.core.config import get_settings
 from app.core.dependencies import get_current_user
 from app.main import app
 from app.models.role import Role
@@ -40,6 +42,40 @@ _FAKE_USER = User(
     is_verified=True,
     role=Role.USER,
 )
+
+
+@pytest.fixture(autouse=True)
+def _reset_settings_cache():
+    """Clear the get_settings() lru_cache before and after every test.
+
+    get_settings() is process-wide cached (see app/core/config.py). Without
+    this, a test that monkeypatches env vars and forgets its own
+    get_settings.cache_clear() call leaves stale/mutated settings in effect
+    for every test that runs after it in the same pytest process — order-
+    dependent failures that pass in isolation but fail in the full suite.
+    This fixture makes that class of bug impossible instead of relying on
+    every individual test remembering to clean up after itself.
+
+    This also clears each API client's module-level rotation-manager cache
+    (groq, tts/elevenlabs, aviationstack, aerodatabox, opensky, openverse) --
+    those caches have the exact same problem as get_settings() but live in
+    each client module instead, so they need their own reset calls.
+    """
+    get_settings.cache_clear()
+    groq.reset_rotation_manager_cache()
+    tts.reset_rotation_manager_cache()
+    aviationstack.reset_rotation_manager_cache()
+    aerodatabox.reset_rotation_manager_cache()
+    opensky.reset_rotation_manager_cache()
+    openverse.reset_rotation_manager_cache()
+    yield
+    get_settings.cache_clear()
+    groq.reset_rotation_manager_cache()
+    tts.reset_rotation_manager_cache()
+    aviationstack.reset_rotation_manager_cache()
+    aerodatabox.reset_rotation_manager_cache()
+    opensky.reset_rotation_manager_cache()
+    openverse.reset_rotation_manager_cache()
 
 
 @pytest.fixture

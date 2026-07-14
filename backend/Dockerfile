@@ -53,8 +53,9 @@ COPY --chown=aloft:aloft app ./app
 # Copy gunicorn config (required by CMD)
 COPY --chown=aloft:aloft gunicorn.conf.py ./gunicorn.conf.py
 
-# Copy background music assets for audio mixing
-COPY --chown=aloft:aloft music_assets ./music_assets
+# Music assets are no longer bundled in the image -- they're fetched from R2
+# at runtime via app/services/music_asset_repository.py (run
+# scripts/upload_music_assets_to_r2.py once to upload them).
 
 # Create audio storage directory with proper permissions
 RUN mkdir -p /app/audio_storage && \

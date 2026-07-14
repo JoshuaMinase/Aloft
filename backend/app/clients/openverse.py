@@ -70,14 +70,31 @@ def _get_rotation_manager():
     global _rotation_manager
     if _rotation_manager is None:
         settings = get_settings()
-        client_ids = settings.openverse_client_ids
-        client_secrets = settings.openverse_client_secrets
+        # Handle both the property (real Settings) and direct attribute (mocked Settings in tests)
+        client_ids = getattr(settings, "openverse_client_ids", None)
+        client_secrets = getattr(settings, "openverse_client_secrets", None)
+        if client_ids is None or client_secrets is None:
+            # Fallback for tests that mock Settings without the property
+            client_id = settings.openverse_client_id
+            client_secret = settings.openverse_client_secret
+            client_ids = [client_id] if client_id else []
+            client_secrets = [client_secret.get_secret_value()] if client_secret else []
         if not client_ids or not client_secrets:
             logger.warning("No Openverse credentials configured for rotation")
         # Pair up client IDs with their corresponding secrets
         credentials = list(zip(client_ids, client_secrets, strict=False)) if client_ids and client_secrets else []
         _rotation_manager = credentials
     return _rotation_manager
+
+
+def reset_rotation_manager_cache() -> None:
+    """Clear the cached credentials list so it's rebuilt from current settings.
+
+    See app/clients/groq.py's reset_rotation_manager_cache() for why this
+    exists — same module-level-cache-survives-across-tests problem.
+    """
+    global _rotation_manager
+    _rotation_manager = None
 
 
 class OpenverseImage(BaseModel):
