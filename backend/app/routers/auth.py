@@ -1,10 +1,8 @@
 """
-Authentication router — account creation, email verification, login, token refresh, logout, password reset, and profile.
+Authentication router — account creation, login, token refresh, logout, password reset, and profile.
 
 Public endpoints (no JWT required):
-  POST /auth/signup            — create a new account (sends verification email)
-  GET  /auth/verify-email     — verify email address with token (returns tokens)
-  POST /auth/resend-verification — resend verification email
+  POST /auth/signup            — create a new account
   POST /auth/login             — exchange email+password for tokens
   POST /auth/refresh           — exchange a refresh token for a new access token
   POST /auth/forgot-password   — request a password reset email
@@ -14,7 +12,7 @@ Protected endpoint (JWT required):
   POST /auth/logout   — invalidate refresh token
   GET  /auth/me       — return the current user's public profile
 
-Note: Users must verify their email before logging in. Protected endpoints require verified accounts.
+Note: Email verification is disabled for development/testing.
 """
 
 from __future__ import annotations
@@ -58,12 +56,6 @@ from app.services.user_repository import (
     get_user_by_email,
     get_user_by_id,
     update_user,
-)
-from app.services.verification_service import (
-    VerificationError,
-    delete_verification_token,
-    get_user_id_from_token,
-    send_verification_email,
 )
 
 router = APIRouter(prefix="/v1/auth", tags=["auth"])
@@ -158,14 +150,12 @@ async def signup(
     body: SignupRequest,
     db: AsyncIOMotorDatabase = Depends(get_database),
 ) -> MessageResponse:
-    """Create a new user account and send a verification email.
+    """Create a new user account (email verification bypassed for development).
 
     - Email is stored lowercase and must be unique.
     - Password must be at least 8 characters.
-    - Account is created with is_verified=False.
-    - A verification email is sent with a link to verify the email address.
-    - User must verify email before logging in.
-    - In development, the verification token is logged to console if email fails.
+    - Account is created with is_verified=True for immediate login.
+    - Email verification is disabled for development/testing.
 
     422 if the email is invalid.
     409 if the email is already registered.
@@ -175,132 +165,121 @@ async def signup(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
-    # Send verification email
-    try:
-        try:
-            redis = _get_rate_limit_redis()
-        except RuntimeError:
-            redis = None
-        token = await send_verification_email(redis, user.user_id, user.email)
-
-        # In development, log the token for easier testing
-        settings = get_settings()
-        if settings.environment.lower() == "development":
-            logger.info(f"DEV MODE: Verification token for {user.email}: {token}")
-            logger.info(f"DEV MODE: Use POST /v1/auth/dev-verify with token: {token}")
-
-    except VerificationError as exc:
-        # Log the error but don't fail the signup - user can request resend
-        logger.warning(f"Failed to send verification email to {user.email}: {exc}")
-
-    return MessageResponse(
-        message="Account created successfully. Please check your email to verify your account."
-    )
-
-
-class VerifyEmailRequest(BaseModel):
-    token: str
-
-
-@router.post(
-    "/verify-email",
-    response_model=TokenResponse,
-    summary="Verify email address with token",
-)
-async def verify_email(
-    body: VerifyEmailRequest,
-    db: AsyncIOMotorDatabase = Depends(get_database),
-) -> TokenResponse:
-    """Verify email address using a token from the verification email.
-
-    Accepts the token in the **request body** (not a query parameter) so the
-    token is never written to server access logs or browser history.
-
-    Validates the token from Redis, marks the user as verified, and returns
-    authentication tokens (this is when the user gets logged in for the first time).
-
-    The token is single-use and expires after 24 hours.
-
-    400 if the token is invalid or expired.
-    404 if the user no longer exists.
-    """
-    redis = _get_rate_limit_redis()
-    user_id = await get_user_id_from_token(redis, body.token)
-
-    if not user_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid or expired verification token",
-        )
-
-    user = await get_user_by_id(db, user_id)
-    if user is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found",
-        )
-
-    # Mark user as verified
+    # Auto-verify user for development/testing
     user.is_verified = True
     await update_user(db, user)
 
-    # Delete the verification token (single-use)
-    await delete_verification_token(redis, body.token)
-
-    logger.info(f"Email verified for user {user.user_id}")
-
-    # Return authentication tokens (user is now logged in)
-    return TokenResponse(
-        access_token=create_access_token(user.user_id, user.email),
-        refresh_token=create_refresh_token(user.user_id),
-    )
-
-
-@router.post(
-    "/resend-verification",
-    response_model=MessageResponse,
-    status_code=status.HTTP_202_ACCEPTED,
-    summary="Resend verification email",
-)
-async def resend_verification(
-    body: ForgotPasswordRequest,  # Reuse ForgotPasswordRequest (just needs email)
-    db: AsyncIOMotorDatabase = Depends(get_database),
-) -> MessageResponse:
-    """Resend a verification email to the user.
-
-    Always returns 202 Accepted to prevent email enumeration attacks.
-    If the email is not registered, no email is sent but the response is still 202.
-    If the email is registered and not verified, a new verification email is sent.
-
-    Rate limited to prevent abuse.
-    """
-    user = await get_user_by_email(db, body.email)
-
-    if user is None:
-        # Don't reveal whether the email exists - prevent enumeration
-        logger.info(f"Verification resend requested for non-existent email: {body.email}")
-        return MessageResponse(
-            message="If an account with this email exists, a verification email has been sent."
-        )
-
-    if user.is_verified:
-        # Don't reveal verification status to prevent enumeration
-        logger.info(f"Verification resend requested for already verified email: {body.email}")
-        return MessageResponse(
-            message="If an account with this email exists, a verification email has been sent."
-        )
-
-    # Send new verification email
-    try:
-        redis = _get_rate_limit_redis()
-        await send_verification_email(redis, user.user_id, user.email)
-    except VerificationError as exc:
-        # Log the error but don't fail the request
-        logger.warning(f"Failed to resend verification email to {user.email}: {exc}")
+    logger.info(f"Account created and auto-verified for {user.email}")
 
     return MessageResponse(
-        message="If an account with this email exists, a verification email has been sent."
+        message="Account created successfully. You can now log in."
     )
+
+
+# Email verification endpoints removed for development/testing
+# class VerifyEmailRequest(BaseModel):
+#     token: str
+#
+#
+# @router.post(
+#     "/verify-email",
+#     response_model=TokenResponse,
+#     summary="Verify email address with token",
+# )
+# async def verify_email(
+#     body: VerifyEmailRequest,
+#     db: AsyncIOMotorDatabase = Depends(get_database),
+# ) -> TokenResponse:
+#     """Verify email address using a token from the verification email.
+#
+#     Accepts the token in the **request body** (not a query parameter) so the
+#     token is never written to server access logs or browser history.
+#
+#     Validates the token from Redis, marks the user as verified, and returns
+#     authentication tokens (this is when the user gets logged in for the first time).
+#
+#     The token is single-use and expires after 24 hours.
+#
+#     400 if the token is invalid or expired.
+#     404 if the user no longer exists.
+#     """
+#     redis = _get_rate_limit_redis()
+#     user_id = await get_user_id_from_token(redis, body.token)
+#
+#     if not user_id:
+#         raise HTTPException(
+#             status_code=status.HTTP_400_BAD_REQUEST,
+#             detail="Invalid or expired verification token",
+#         )
+#
+#     user = await get_user_by_id(db, user_id)
+#     if user is None:
+#         raise HTTPException(
+#             status_code=status.HTTP_404_NOT_FOUND,
+#             detail="User not found",
+#         )
+#
+#     # Mark user as verified
+#     user.is_verified = True
+#     await update_user(db, user)
+#
+#     # Delete the verification token (single-use)
+#     await delete_verification_token(redis, body.token)
+#
+#     logger.info(f"Email verified for user {user.user_id}")
+#
+#     # Return authentication tokens (user is now logged in)
+#     return TokenResponse(
+#         access_token=create_access_token(user.user_id, user.email),
+#         refresh_token=create_refresh_token(user.user_id),
+#     )
+#
+#
+# @router.post(
+#     "/resend-verification",
+#     response_model=MessageResponse,
+#     status_code=status.HTTP_202_ACCEPTED,
+#     summary="Resend verification email",
+# )
+# async def resend_verification(
+#     body: ForgotPasswordRequest,  # Reuse ForgotPasswordRequest (just needs email)
+#     db: AsyncIOMotorDatabase = Depends(get_database),
+# ) -> MessageResponse:
+#     """Resend a verification email to the user.
+#
+#     Always returns 202 Accepted to prevent email enumeration attacks.
+#     If the email is not registered, no email is sent but the response is still 202.
+#     If the email is registered and not verified, a new verification email is sent.
+#
+#     Rate limited to prevent abuse.
+#     """
+#     user = await get_user_by_email(db, body.email)
+#
+#     if user is None:
+#         # Don't reveal whether the email exists - prevent enumeration
+#         logger.info(f"Verification resend requested for non-existent email: {body.email}")
+#         return MessageResponse(
+#             message="If an account with this email exists, a verification email has been sent."
+#         )
+#
+#     if user.is_verified:
+#         # Don't reveal verification status to prevent enumeration
+#         logger.info(f"Verification resend requested for already verified email: {body.email}")
+#         return MessageResponse(
+#             message="If an account with this email exists, a verification email has been sent."
+#         )
+#
+#     # Send new verification email
+#     try:
+#         redis = _get_rate_limit_redis()
+#         await send_verification_email(redis, user.user_id, user.email)
+#     except VerificationError as exc:
+#         # Log the error but don't fail the request
+#         logger.warning(f"Failed to resend verification email to {user.email}: {exc}")
+#
+#     return MessageResponse(
+#         message="If an account with this email exists, a verification email has been sent."
+#     )
 
 
 @router.post(
@@ -378,12 +357,13 @@ async def login(
             detail="Account is deactivated.",
         )
 
-    settings = get_settings()
-    if not user.is_verified and settings.environment.lower() != "development":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Please verify your email address before logging in. Check your inbox for the verification link or request a new one.",
-        )
+    # Email verification bypassed for development/testing
+    # settings = get_settings()
+    # if not user.is_verified and settings.environment.lower() != "development":
+    #     raise HTTPException(
+    #         status_code=status.HTTP_403_FORBIDDEN,
+    #         detail="Please verify your email address before logging in. Check your inbox for the verification link or request a new one.",
+    #     )
 
     # Reset failed login attempts on successful login
     if user.failed_login_attempts > 0:

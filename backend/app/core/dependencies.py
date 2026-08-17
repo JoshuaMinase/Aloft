@@ -7,31 +7,28 @@ authenticated user," etc.
 
 AUTH MODEL
 ══════════
-Authentication uses stateless JWT bearer tokens with email verification:
+Authentication uses stateless JWT bearer tokens. Email verification is disabled —
+accounts are auto-verified on signup.
 
-  POST /auth/signup              → create account → sends verification email
-  GET  /auth/verify-email        → verify email → returns {access_token, refresh_token}
-  POST /auth/resend-verification → resend verification email
+  POST /auth/signup              → create account (auto-verified)
   POST /auth/login               → verify password → returns {access_token, refresh_token}
   POST /auth/refresh             → exchange refresh token for new access token
 
 All protected routes call `get_current_user` as a dependency, which:
   1. Reads the Authorization: Bearer <token> header.
   2. Decodes + validates the JWT (signature, expiry, type claim).
-  3. Looks up the user_id in MongoDB to confirm the account exists + is active + is verified.
+  3. Looks up the user_id in MongoDB to confirm the account exists + is active.
   4. Returns the User model — available in the endpoint as a parameter.
 
 Public endpoints (no auth required):
   GET  /health
   POST /auth/signup
-  GET  /auth/verify-email
-  POST /auth/resend-verification
   POST /auth/login
   POST /auth/refresh
   POST /auth/forgot-password
   POST /auth/reset-password
 
-Everything else requires a valid access token from a verified email address.
+Everything else requires a valid access token.
 
 Rate limits key by user_id for authenticated endpoints (where the user is resolved),
 falling back to IP for public endpoints.
@@ -127,20 +124,21 @@ async def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    if not user.is_verified:
-        settings = get_settings()
-        if settings.skip_email_verification:
-            logger.warning(
-                "SKIP_EMAIL_VERIFICATION is enabled — bypassing email verification for user %s. "
-                "This is a dev-only setting and must never be used in production.",
-                user_id,
-            )
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Please verify your email address before accessing this resource.",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
+    # Email verification bypassed for development/testing
+    # if not user.is_verified:
+    #     settings = get_settings()
+    #     if settings.skip_email_verification:
+    #         logger.warning(
+    #             "SKIP_EMAIL_VERIFICATION is enabled — bypassing email verification for user %s. "
+    #             "This is a dev-only setting and must never be used in production.",
+    #             user_id,
+    #         )
+    #     else:
+    #         raise HTTPException(
+    #             status_code=status.HTTP_403_FORBIDDEN,
+    #             detail="Please verify your email address before accessing this resource.",
+    #             headers={"WWW-Authenticate": "Bearer"},
+    #         )
 
     return user
 
@@ -227,8 +225,9 @@ async def _get_user_if_authenticated(
 ) -> User | None:
     """Lightweight user lookup for rate limiting purposes.
 
-    Returns the User if authenticated (valid token + active account + verified email),
+    Returns the User if authenticated (valid token + active account),
     or None if not authenticated. Does NOT raise 401 for missing auth.
+    Email verification bypassed for development/testing.
     """
     if credentials is None:
         return None
@@ -243,7 +242,7 @@ async def _get_user_if_authenticated(
         return None
 
     user = await get_user_by_id(db, user_id)
-    if user is None or not user.is_active or not user.is_verified:
+    if user is None or not user.is_active:
         return None
 
     return user

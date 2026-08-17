@@ -182,12 +182,12 @@ async def discover_flight(
     formatted_pois = [
         {
             "id": f"wikipedia:{p.page_id}",
-            "name": p.name,
-            "description": p.summary[:200] if p.summary else "",
+            "name": p.title,
+            "description": "",
             "lat": p.lat,
             "lng": p.lng,
-            "country": p.country,
-            "distanceFromPath": p.distance_km,
+            "country": "",
+            "distanceFromPath": p.distance_m / 1000,  # Convert meters to km
             "hasStory": False,
             "hasAudio": False,
         }

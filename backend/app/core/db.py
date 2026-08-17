@@ -23,15 +23,22 @@ async def connect_to_mongo() -> None:
     settings = get_settings()
     logger.info("Connecting to MongoDB at %s", settings.mongodb_uri)
     try:
+        # Check if using local MongoDB (localhost) to disable TLS
+        is_local = "localhost" in settings.mongodb_uri or "127.0.0.1" in settings.mongodb_uri
+        
         kwargs = {
             "serverSelectionTimeoutMS": 30000,
             "connectTimeoutMS": 30000,
             "retryWrites": True,
             "w": "majority",
-            "tls": True,
-            "tlsAllowInvalidCertificates": False,
             "retryReads": True,
         }
+        
+        # Only enable TLS for non-local connections
+        if not is_local:
+            kwargs["tls"] = True
+            kwargs["tlsAllowInvalidCertificates"] = False
+        
         _client = AsyncIOMotorClient(settings.mongodb_uri, **kwargs)
         _db = _client[settings.mongodb_db_name]
         await _db.command("ping")
