@@ -45,8 +45,13 @@ logger = logging.getLogger("aloft.services.audio_repository")
 _R2_PREFIX = "r2:"
 
 
-def _compress_audio(input_bytes: bytes) -> bytes:
-    """Compress MP3 to 64kbps — half size, same quality for speech."""
+def _compress_audio_sync(input_bytes: bytes) -> bytes:
+    """Compress MP3 to 64kbps — half size, same quality for speech.
+
+    Blocking (subprocess.run) by design -- must only ever be called via
+    _compress_audio()'s run_in_executor, never awaited directly from the
+    event loop. See _compress_audio() for why.
+    """
     try:
         result = subprocess.run(
             ["ffmpeg", "-i", "pipe:0", "-b:a", "64k", "-f", "mp3", "pipe:1", "-loglevel", "quiet"],
@@ -56,9 +61,28 @@ def _compress_audio(input_bytes: bytes) -> bytes:
         )
         if result.returncode == 0 and result.stdout:
             return result.stdout
+    except FileNotFoundError:
+        # ffmpeg isn't installed -- expected unless it's been added to the
+        # runtime image (see Dockerfile). Falls back to uncompressed audio,
+        # which still works fine, just larger.
+        logger.debug("ffmpeg not found -- skipping audio compression")
     except Exception:
-        pass
+        logger.warning("Audio compression failed -- falling back to uncompressed", exc_info=True)
     return input_bytes  # fall back to uncompressed
+
+
+async def _compress_audio(input_bytes: bytes) -> bytes:
+    """Async wrapper around _compress_audio_sync().
+
+    subprocess.run() blocks the calling thread for the life of the ffmpeg
+    process (up to the 30s timeout above). Calling it directly from an
+    async function would freeze the *entire* event loop for that whole
+    duration -- every other in-flight request stalls, not just this one.
+    run_in_executor hands the blocking call to a worker thread so the loop
+    stays free to serve other requests while ffmpeg runs.
+    """
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, _compress_audio_sync, input_bytes)
 
 
 def _r2_object_key(poi_source_id: str, language: str, voice_name: str) -> str:
@@ -110,8 +134,9 @@ async def save_audio(
     """
     settings = get_settings()
 
-    # Compress audio before saving
-    audio_bytes = _compress_audio(audio_bytes)
+    # Compress audio before saving (runs ffmpeg in a worker thread so it
+    # doesn't block the event loop -- see _compress_audio's docstring).
+    audio_bytes = await _compress_audio(audio_bytes)
 
     if settings.r2_configured:
         key = _r2_object_key(poi_source_id, language, voice_name)

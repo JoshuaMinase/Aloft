@@ -158,7 +158,9 @@ class _TokenCache:
         # Try each credential pair
         for client_id, client_secret in credentials:
             # Skip if this credential pair is marked as exhausted
-            if len(credentials) > 1 and is_key_exhausted("opensky", f"{client_id}:{client_secret}"):
+            if len(credentials) > 1 and await is_key_exhausted(
+                "opensky", f"{client_id}:{client_secret}"
+            ):
                 logger.debug("Skipping exhausted OpenSky credentials")
                 continue
             
@@ -181,7 +183,7 @@ class _TokenCache:
                                 client_id, exc)
                     # Mark these credentials as exhausted if using rotation
                     if len(credentials) > 1:
-                        mark_key_exhausted("opensky", f"{client_id}:{client_secret}")
+                        await mark_key_exhausted("opensky", f"{client_id}:{client_secret}")
                     continue
         
         return None

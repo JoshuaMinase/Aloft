@@ -101,15 +101,15 @@ async def test_quota_exhausted_429_fails_immediately_without_retrying():
             route = respx.get(f"{AVIATIONSTACK_BASE_URL}/flights").mock(
                 return_value=httpx.Response(429, json=quota_response)
             )
-            with pytest.raises(AviationStackClientError, match="flights request failed"):
+            with pytest.raises(AviationStackClientError, match="quota is exhausted"):
                 await get_flight(client, "ET409")
 
-    # With a single API key, quota errors are still retried within the key's
-    # retry loop (max 3 attempts), then marked as exhausted and the specific
-    # error is raised. The test expects 2 calls because the first attempt fails
-    # with quota, it retries once, then raises the specific error on the second
-    # failure (not continuing to the 3rd retry since quota is considered terminal).
-    assert route.call_count == 2
+    # A quota-exhausted 429 (usage_limit_reached) is a hard, non-transient
+    # failure -- retrying the same key won't help, it'll just waste more of
+    # the (already exhausted) quota. The client breaks out of the retry loop
+    # immediately on the first such response and raises the specific,
+    # actionable error instead of burning through all _MAX_ATTEMPTS retries.
+    assert route.call_count == 1
 
 
 @pytest.mark.asyncio

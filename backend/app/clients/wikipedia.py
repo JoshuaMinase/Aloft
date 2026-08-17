@@ -184,8 +184,12 @@ async def get_images(client: httpx.AsyncClient, title: str, max_images: int = 4)
         WikipediaClientError: if a request fails outright.
     """
     async with _wiki_semaphore:
-        lead_image = await _get_lead_image(client, title)
-        gallery_images = await _get_gallery_images(client, title)
+        # These two calls are independent (both only need the article title),
+        # so run them concurrently instead of one after the other -- halves
+        # the wall-clock time of every image fetch.
+        lead_image, gallery_images = await asyncio.gather(
+            _get_lead_image(client, title), _get_gallery_images(client, title)
+        )
 
     results: list[RawImage] = []
     seen_urls: set[str] = set()

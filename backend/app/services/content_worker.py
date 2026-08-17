@@ -1,16 +1,33 @@
 """
-Processes content generation jobs from the Redis queue, one POI at a
-time with deliberate delays between each request.
+Processes content generation jobs from the Redis queue.
 
 This runs as a separate async task started in main.py's lifespan --
 not a separate process, just a background asyncio task that picks up
 jobs while the main API handles requests normally.
 
-Rate limit strategy:
-- Groq:     1 story every 3 seconds (stays under 30/min)
-- Wikipedia: 1 image fetch every 1 second (avoids 429 bursts)
-- On 429:   back off 60 seconds, retry up to 3 times
-- On other error: log, mark POI failed, move to next POI
+Concurrency / rate limit strategy
+──────────────────────────────────
+POIs within a job are processed with bounded concurrency (up to
+`content_generation_max_concurrent` in flight at once, same setting the
+Groq client's own semaphore uses) instead of strictly one-at-a-time.
+This used to be fully serial with a hardcoded 3s sleep between every
+single POI -- safe, but slow: a 200-POI route took 10-15 minutes even
+though nothing was actually rate-limited most of that time. The real
+rate-limit protection lives one layer down, in each API client
+(app/clients/groq.py, app/clients/tts.py, app/clients/wikipedia.py):
+they already have their own semaphores and exponential backoff that
+honours a 429's Retry-After header. Bounding concurrency here to the
+same number those clients allow through gets a multi-POI speedup
+without asking the worker to duplicate rate-limit logic the clients
+already do correctly.
+
+Within a single POI, image fetching doesn't depend on the generated
+story (it only needs the POI's name), so it now runs concurrently with
+story+audio generation instead of strictly after it.
+
+- On 429:   back off (RATE_LIMIT_BACKOFF_SECONDS, exponential), retry
+            up to MAX_POI_RETRIES times.
+- On other error: log, mark POI failed, move to the next POI.
 """
 
 from __future__ import annotations
@@ -25,11 +42,10 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from app.clients.groq import GroqClientError
 from app.clients.tts import TtsClientError
 from app.clients.wikipedia import WikipediaClientError, get_images
+from app.core.config import get_settings
 from app.services.audio_repository import get_audio, save_audio
 from app.services.audio_service import get_voice_id_for_language, synthesize_story_audio
 from app.services.content_job_service import (
-    INTER_IMAGE_DELAY_SECONDS,
-    INTER_POI_DELAY_SECONDS,
     MAX_POI_RETRIES,
     RATE_LIMIT_BACKOFF_SECONDS,
     JobStatus,
@@ -112,49 +128,50 @@ async def _process_job(
 
     poi_source_ids = job["poi_source_ids"]
     language = job["language"]
-    completed = 0
-    failed = 0
 
     await update_job_progress(redis_client, job_id, 0, 0, JobStatus.PROCESSING)
     logger.info("Processing job %s: %d POIs, language=%s", job_id, len(poi_source_ids), language)
 
-    for source_id in poi_source_ids:
-        success = await _process_one_poi_with_retry(
-            http_client,
-            db,
-            redis_client,
-            job_id,
-            source_id,
-            language,
-            completed,
-            failed,
-        )
-        if success:
-            completed += 1
-        else:
-            failed += 1
+    settings = get_settings()
+    concurrency = max(1, settings.content_generation_max_concurrent)
+    semaphore = asyncio.Semaphore(concurrency)
 
-        await update_job_progress(redis_client, job_id, completed, failed, JobStatus.PROCESSING)
+    # Mutable counters shared across concurrent tasks -- guarded by a lock
+    # since multiple POIs can finish at (almost) the same instant.
+    counts = {"completed": 0, "failed": 0}
+    counts_lock = asyncio.Lock()
 
-        # Deliberate delay between POIs -- this is the key fix.
-        # Without this, 200 POIs fire 200 Groq requests instantly → 429s.
-        await asyncio.sleep(INTER_POI_DELAY_SECONDS)
+    async def _run_one(source_id: str) -> None:
+        async with semaphore:
+            success = await _process_one_poi_with_retry(
+                http_client, db, source_id, language
+            )
+        async with counts_lock:
+            if success:
+                counts["completed"] += 1
+            else:
+                counts["failed"] += 1
+            await update_job_progress(
+                redis_client, job_id, counts["completed"], counts["failed"], JobStatus.PROCESSING
+            )
+
+    await asyncio.gather(*(_run_one(source_id) for source_id in poi_source_ids))
 
     # Job is COMPLETED even if some POIs failed -- we processed everything we could
     final_status = JobStatus.COMPLETED
-    await update_job_progress(redis_client, job_id, completed, failed, final_status)
-    logger.info("Job %s done: %d completed, %d failed", job_id, completed, failed)
+    await update_job_progress(
+        redis_client, job_id, counts["completed"], counts["failed"], final_status
+    )
+    logger.info(
+        "Job %s done: %d completed, %d failed", job_id, counts["completed"], counts["failed"]
+    )
 
 
 async def _process_one_poi_with_retry(
     http_client: httpx.AsyncClient,
     db: AsyncIOMotorDatabase,
-    redis_client: redis.Redis,
-    job_id: str,
     source_id: str,
     language: str,
-    completed: int,
-    failed: int,
 ) -> bool:
     """Process one POI with exponential backoff on rate limits and errors."""
     backoff_base = RATE_LIMIT_BACKOFF_SECONDS
@@ -219,33 +236,44 @@ async def _process_one_poi(
     source_id: str,
     language: str,
 ) -> None:
-    """Generate story + audio + images for one POI if not already cached."""
+    """Generate story + audio + images for one POI if not already cached.
+
+    Image fetching only needs the POI's name (known up front), not the
+    generated story, so it runs concurrently with story+audio generation
+    via asyncio.gather rather than strictly after it.
+    """
     poi = await get_poi(db, source_id)
     if poi is None:
         return
 
-    # Story -- skip if already exists
-    story = await get_story(db, source_id, language)
-    if story is None:
-        story = await generate_story(http_client, source_id, poi.name, language=language)
-        await save_story(db, story)
+    async def _story_and_audio() -> None:
+        # Story -- skip if already exists
+        story = await get_story(db, source_id, language)
+        if story is None:
+            story = await generate_story(http_client, source_id, poi.name, language=language)
+            await save_story(db, story)
 
-    # Audio -- skip if already exists
-    voice_id = get_voice_id_for_language(language)
-    existing_audio = await get_audio(db, source_id, language, voice_id)
-    if existing_audio is None:
-        try:
-            audio_bytes = await synthesize_story_audio(
-                story.text_content, language=language, http_client=http_client
-            )
-            await save_audio(db, source_id, language, voice_id, audio_bytes)
-        except TtsClientError as exc:
-            logger.warning("TTS failed for %s: %s -- story saved, no audio", source_id, exc)
+        # Audio -- skip if already exists
+        voice_id = get_voice_id_for_language(language)
+        existing_audio = await get_audio(db, source_id, language, voice_id)
+        if existing_audio is None:
+            try:
+                audio_bytes = await synthesize_story_audio(
+                    story.text_content, language=language, http_client=http_client
+                )
+                await save_audio(db, source_id, language, voice_id, audio_bytes)
+            except TtsClientError as exc:
+                logger.warning("TTS failed for %s: %s -- story saved, no audio", source_id, exc)
 
-    # Images -- with deliberate delay, separate from story generation
-    await asyncio.sleep(INTER_IMAGE_DELAY_SECONDS)
-    # Re-fetch POI to check if images were added since we started
-    poi = await get_poi(db, source_id)
-    if poi is not None and not poi.image_refs:
-        images = await get_images(http_client, poi.name)
-        await save_poi_images(db, source_id, [img.url for img in images])
+    async def _images() -> None:
+        # Re-fetch the POI in case images were added concurrently (e.g. by
+        # a discover_pois?auto_images=true call) since we started.
+        current = await get_poi(db, source_id)
+        if current is not None and not current.image_refs:
+            images = await get_images(http_client, current.name)
+            await save_poi_images(db, source_id, [img.url for img in images])
+
+    results = await asyncio.gather(_story_and_audio(), _images(), return_exceptions=True)
+    for result in results:
+        if isinstance(result, BaseException):
+            raise result

@@ -224,17 +224,22 @@ async def _request(client: httpx.AsyncClient, endpoint: str, params: dict) -> li
     log_params = {k: v for k, v in params.items()}  # key excluded for logging
     timeout = httpx.Timeout(connect=5.0, read=10.0, write=5.0, pool=5.0)
 
+    # last_error is set inside the per-key loop below. If every key is
+    # skipped as pre-exhausted, the loop body never runs -- keep this
+    # defined up front so the final `raise ... from last_error` can't hit
+    # an UnboundLocalError in that case.
+    last_error: Exception | None = None
+
     # Try each available API key
     for api_key in api_keys:
         # Skip if this key is marked as exhausted (only when using multiple keys)
-        if len(api_keys) > 1 and is_key_exhausted("aviationstack", api_key):
+        if len(api_keys) > 1 and await is_key_exhausted("aviationstack", api_key):
             logger.debug("Skipping exhausted AviationStack API key")
             continue
 
         # access_key is passed as a query param (AviationStack's documented method).
         full_params = {"access_key": api_key, **params}
 
-        last_error: Exception | None = None
         should_mark_exhausted = False
 
         for attempt in range(1, _MAX_ATTEMPTS + 1):
@@ -282,7 +287,7 @@ async def _request(client: httpx.AsyncClient, endpoint: str, params: dict) -> li
         # and we encountered quota errors
         if len(api_keys) > 1 and should_mark_exhausted:
             logger.warning("Marking AviationStack API key as exhausted after quota errors")
-            mark_key_exhausted("aviationstack", api_key)
+            await mark_key_exhausted("aviationstack", api_key)
         # Continue to next key if using rotation
         if len(api_keys) > 1:
             continue
@@ -294,6 +299,11 @@ async def _request(client: httpx.AsyncClient, endpoint: str, params: dict) -> li
             raise last_error
         break
 
+    if last_error is None:
+        raise AviationStackClientError(
+            f"{endpoint} request failed: all configured AviationStack API keys are "
+            "currently marked exhausted (cooling down after a previous quota error)."
+        )
     raise AviationStackClientError(
         f"{endpoint} request failed after trying all API keys"
     ) from last_error

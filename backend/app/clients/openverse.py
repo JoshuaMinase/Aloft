@@ -220,7 +220,9 @@ async def _get_auth_headers(
     # Try each credential pair with rotation
     for client_id, client_secret in credentials:
         # Skip if this credential pair is marked as exhausted
-        if len(credentials) > 1 and is_key_exhausted("openverse", f"{client_id}:{client_secret}"):
+        if len(credentials) > 1 and await is_key_exhausted(
+            "openverse", f"{client_id}:{client_secret}"
+        ):
             logger.debug("Skipping exhausted Openverse credentials")
             continue
         
@@ -244,7 +246,7 @@ async def _get_auth_headers(
             logger.warning("Openverse OAuth failed with credentials %s, trying next: %s", client_id, exc)
             # Mark these credentials as exhausted if using rotation
             if len(credentials) > 1:
-                mark_key_exhausted("openverse", f"{client_id}:{client_secret}")
+                await mark_key_exhausted("openverse", f"{client_id}:{client_secret}")
             continue
     
     # All credentials failed, fall back to anonymous

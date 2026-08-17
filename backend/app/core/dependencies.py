@@ -393,6 +393,22 @@ def session_creation_rate_limit():
     )
 
 
+def spectator_view_rate_limit():
+    """Rate limit dependency for GET /sessions/shared/{token}.
+
+    Fully public and unauthenticated -- anyone with a share link can hit
+    it, so this is IP-based (like flight_lookup_rate_limit) rather than
+    per-user like the other session endpoints.
+    """
+    settings = get_settings()
+    return rate_limit(
+        "spectator_view",
+        max_requests=settings.rate_limit_spectator_view_per_minute,
+        window_seconds=60,
+        use_user_id=False,
+    )
+
+
 def mixed_audio_rate_limit():
     """Rate limit dependency for POST /pois/{source_id}/audio/mixed.
 

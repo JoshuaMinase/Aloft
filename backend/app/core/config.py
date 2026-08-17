@@ -64,6 +64,11 @@ class Settings(BaseSettings):
     rate_limit_session_creation_per_hour: int = 20
     rate_limit_mixed_audio_per_hour: int = 15
     rate_limit_image_retrieval_per_hour: int = 40
+    # Public spectator view (GET /sessions/shared/{token}) has no auth to key
+    # by, so it's IP-based and per-minute rather than per-hour like the
+    # authenticated session endpoints -- someone actually watching a flight
+    # will poll it every few seconds.
+    rate_limit_spectator_view_per_minute: int = 120
 
     # Account lockout settings
     max_failed_login_attempts: int = 5

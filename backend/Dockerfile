@@ -32,9 +32,13 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PATH="/opt/venv/bin:$PATH"
 
-# Install only runtime dependencies (no libpq5 — app uses MongoDB, not PostgreSQL)
+# Install only runtime dependencies (no libpq5 — app uses MongoDB, not PostgreSQL).
+# ffmpeg is required by app/services/audio_repository.py to compress narration
+# MP3s to 64kbps before storage -- without it, compression silently no-ops
+# and every audio file is stored at roughly double the size.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user for security

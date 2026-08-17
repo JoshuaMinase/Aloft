@@ -24,7 +24,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import httpx
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Response
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pydantic import BaseModel, Field
 from redis.asyncio import Redis
@@ -40,7 +40,9 @@ from app.core.dependencies import (
     position_update_rate_limit,
     require_permission,
     session_creation_rate_limit,
+    spectator_view_rate_limit,
 )
+from app.models.flight_session import FlightSession
 from app.models.role import Permission
 from app.models.user import User
 from app.services.audio_repository import get_audio, save_audio
@@ -49,7 +51,10 @@ from app.services.corridor import distance_km
 from app.services.destination_tour_service import prepare_destination_tour
 from app.services.flight_session_repository import (
     create_session,
+    disable_sharing,
+    enable_sharing,
     get_session,
+    get_session_by_share_token,
     record_destination_tour_narration,
     record_position_and_narration,
     record_region_narration,
@@ -67,7 +72,7 @@ from app.services.region_narration_service import (
     generate_region_narration,
 )
 from app.services.route_bundle_repository import get_route_bundle
-from app.services.story_repository import get_story
+from app.services.story_repository import get_stories_batch, get_story
 from app.services.story_service import InsufficientFactsError, generate_upcoming_story
 
 router = APIRouter(prefix="/v1/sessions", tags=["live session"])
@@ -170,6 +175,41 @@ class PositionUpdateResponse(BaseModel):
     position_source: str = "client"  # "client" | "opensky"
 
 
+class ShareSessionResponse(BaseModel):
+    share_token: str
+    share_path: str
+
+
+class SpectatorNarrationItem(BaseModel):
+    source_id: str | None = None  # None for destination_tour narrations
+    name: str
+    text_content: str | None = None
+    narration_type: str  # "poi" | "destination_tour"
+
+
+class SpectatorSessionView(BaseModel):
+    route_key: str
+    arrival_city: str | None = None
+    arrival_country: str | None = None
+    last_position: tuple[float, float] | None = None
+    last_updated_at: datetime
+    narrations: list[SpectatorNarrationItem]
+
+
+def _check_session_ownership(session: FlightSession, current_user: User) -> None:
+    """Reject cross-user access to a session's share controls.
+
+    owner_id="" is the legacy default for sessions created before this
+    check existed; those are left open to avoid breaking existing clients
+    (same convention as update_position's ownership check).
+    """
+    if session.owner_id and session.owner_id != current_user.user_id:
+        raise HTTPException(
+            status_code=403,
+            detail="You do not have permission to manage this session.",
+        )
+
+
 @router.post(
     "",
     response_model=StartSessionResponse,
@@ -221,6 +261,7 @@ async def start_session(
         redis,
         body.route_key,
         owner_id=current_user.user_id,
+        language=body.language,
         arrival_country=arrival_country,
         arrival_city=arrival_city,
         destination_tour_narrations=[],
@@ -259,6 +300,122 @@ async def start_session(
         destination_preview_ready=False,  # Will be ready once background task completes
         arrival_city=arrival_city,
         arrival_country=arrival_country,
+    )
+
+
+@router.post(
+    "/{session_id}/share",
+    response_model=ShareSessionResponse,
+    summary="Enable spectator sharing for a session",
+    dependencies=[Depends(require_permission(Permission.UPDATE_SESSION))],
+)
+async def share_session(
+    session_id: str,
+    current_user: User = Depends(get_current_user),
+    redis: Redis = Depends(get_redis),
+) -> ShareSessionResponse:
+    """Generate a public, read-only spectator link for this session.
+
+    Anyone with the resulting token can watch live position and every
+    narration that's fired so far via `GET /shared/{token}` -- no account
+    or login required. Idempotent: calling this again while sharing is
+    already on returns the same token rather than rotating it, so an
+    already-shared link keeps working.
+
+    404 if the session doesn't exist. 403 if you don't own it.
+    """
+    session = await get_session(redis, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail=f"No session found for '{session_id}'")
+    _check_session_ownership(session, current_user)
+
+    token = await enable_sharing(redis, session_id)
+    return ShareSessionResponse(share_token=token, share_path=f"/v1/sessions/shared/{token}")
+
+
+@router.delete(
+    "/{session_id}/share",
+    status_code=204,
+    summary="Revoke spectator sharing for a session",
+    dependencies=[Depends(require_permission(Permission.UPDATE_SESSION))],
+)
+async def unshare_session(
+    session_id: str,
+    current_user: User = Depends(get_current_user),
+    redis: Redis = Depends(get_redis),
+) -> Response:
+    """Revoke this session's share link. The old token stops working immediately.
+
+    404 if the session doesn't exist. 403 if you don't own it.
+    """
+    session = await get_session(redis, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail=f"No session found for '{session_id}'")
+    _check_session_ownership(session, current_user)
+
+    await disable_sharing(redis, session_id)
+    return Response(status_code=204)
+
+
+@router.get(
+    "/shared/{token}",
+    response_model=SpectatorSessionView,
+    summary="Public spectator view of a shared session",
+    dependencies=[Depends(spectator_view_rate_limit())],
+)
+async def view_shared_session(
+    token: str,
+    db: AsyncIOMotorDatabase = Depends(get_database),
+    redis: Redis = Depends(get_redis),
+) -> SpectatorSessionView:
+    """Fully public, unauthenticated view of a shared flight session.
+
+    Returns the live position plus every POI story and destination-tour
+    highlight narrated so far -- read straight from the same cache the
+    traveler's own app is using, so watching a flight costs nothing extra
+    in AI generation.
+
+    404 if the token is invalid, revoked, or the session has expired.
+    """
+    session = await get_session_by_share_token(redis, token)
+    if session is None:
+        raise HTTPException(status_code=404, detail="This share link is invalid or has expired.")
+
+    narrations: list[SpectatorNarrationItem] = []
+
+    if session.narrated_poi_source_ids:
+        pois = await get_pois_by_source_ids(db, session.narrated_poi_source_ids)
+        poi_names = {poi.source_id: poi.name for poi in pois}
+        stories = await get_stories_batch(db, session.narrated_poi_source_ids, session.language)
+        story_text = {story.poi_source_id: story.text_content for story in stories}
+        for source_id in session.narrated_poi_source_ids:
+            narrations.append(
+                SpectatorNarrationItem(
+                    source_id=source_id,
+                    name=poi_names.get(source_id, source_id),
+                    text_content=story_text.get(source_id),
+                    narration_type="poi",
+                )
+            )
+
+    fired_tour_narrations = session.destination_tour_narrations[: session.destination_tour_index]
+    for narration_text in fired_tour_narrations:
+        narrations.append(
+            SpectatorNarrationItem(
+                source_id=None,
+                name=f"About {session.arrival_city}" if session.arrival_city else "Destination",
+                text_content=narration_text,
+                narration_type="destination_tour",
+            )
+        )
+
+    return SpectatorSessionView(
+        route_key=session.route_key,
+        arrival_city=session.arrival_city,
+        arrival_country=session.arrival_country,
+        last_position=session.last_position,
+        last_updated_at=session.last_updated_at,
+        narrations=narrations,
     )
 
 

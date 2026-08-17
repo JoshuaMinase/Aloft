@@ -10,6 +10,17 @@ Services supported:
 - ElevenLabs (text-to-speech)
 - AviationStack (flight data)
 - AeroDataBox (flight data)
+
+IMPORTANT -- async Redis:
+app.core.redis.get_optional_redis() returns a redis.asyncio.Redis client.
+Every call against it (.exists, .setex, .delete, .scan_iter, .ttl, .get)
+returns an awaitable/async-iterator, not a value. All functions in this
+module are therefore async and must be awaited by callers. (An earlier
+version of this file called these methods without awaiting them -- a
+coroutine object is truthy, so `is_key_exhausted()` silently returned
+True for every key as soon as Redis was connected, making every
+rotation-enabled client believe all of its keys were exhausted
+immediately. Keep every Redis call below behind `await`.)
 """
 
 from __future__ import annotations
@@ -36,7 +47,7 @@ def _get_redis_key(service: str, api_key: str) -> str:
     return f"{_REDIS_PREFIX}{service}:{key_hash}"
 
 
-def mark_key_exhausted(
+async def mark_key_exhausted(
     service: str,
     api_key: str,
     cooldown_seconds: int = _DEFAULT_COOLDOWN_SECONDS,
@@ -63,7 +74,7 @@ def mark_key_exhausted(
         "marked_at": json.dumps({"timestamp": "manually_marked"}),
         "cooldown": cooldown_seconds,
     }
-    redis.setex(redis_key, cooldown_seconds, json.dumps(metadata))
+    await redis.setex(redis_key, cooldown_seconds, json.dumps(metadata))
     logger.info(
         "Marked %s API key as exhausted. Cooldown: %d seconds",
         service,
@@ -71,7 +82,7 @@ def mark_key_exhausted(
     )
 
 
-def is_key_exhausted(service: str, api_key: str) -> bool:
+async def is_key_exhausted(service: str, api_key: str) -> bool:
     """Check if an API key is currently marked as exhausted.
 
     Args:
@@ -87,13 +98,13 @@ def is_key_exhausted(service: str, api_key: str) -> bool:
         return False
 
     redis_key = _get_redis_key(service, api_key)
-    exists = redis.exists(redis_key)
+    exists = await redis.exists(redis_key)
     if exists:
         logger.debug("API key for %s is currently exhausted", service)
     return bool(exists)
 
 
-def get_available_key(
+async def get_available_key(
     service: str,
     api_keys: list[str],
 ) -> str | None:
@@ -111,7 +122,7 @@ def get_available_key(
         return None
 
     for api_key in api_keys:
-        if not is_key_exhausted(service, api_key):
+        if not await is_key_exhausted(service, api_key):
             logger.debug("Using available API key for %s", service)
             return api_key
         logger.debug("Skipping exhausted API key for %s", service)
@@ -125,7 +136,7 @@ def get_available_key(
     return None
 
 
-def clear_exhausted_status(service: str, api_key: str) -> None:
+async def clear_exhausted_status(service: str, api_key: str) -> None:
     """Manually clear the exhausted status for an API key.
 
     Useful for testing or when you want to force retry a key before its
@@ -140,11 +151,11 @@ def clear_exhausted_status(service: str, api_key: str) -> None:
         return
 
     redis_key = _get_redis_key(service, api_key)
-    redis.delete(redis_key)
+    await redis.delete(redis_key)
     logger.info("Cleared exhausted status for %s API key", service)
 
 
-def get_exhausted_keys_info(service: str) -> dict[str, Any]:
+async def get_exhausted_keys_info(service: str) -> dict[str, Any]:
     """Get information about exhausted keys for a service.
 
     Args:
@@ -161,10 +172,10 @@ def get_exhausted_keys_info(service: str) -> dict[str, Any]:
     pattern = f"{_REDIS_PREFIX}{service}:*"
     keys = []
     try:
-        for key in redis.scan_iter(match=pattern):
+        async for key in redis.scan_iter(match=pattern):
             key_str = key.decode() if isinstance(key, bytes) else key
-            ttl = redis.ttl(key_str)
-            value = redis.get(key_str)
+            ttl = await redis.ttl(key_str)
+            value = await redis.get(key_str)
             metadata = json.loads(value) if value else {}
             keys.append({
                 "key_hash": key_str.split(":")[-1],
@@ -187,15 +198,15 @@ class ApiKeyRotationManager:
 
     Usage:
         manager = ApiKeyRotationManager("groq", ["key1", "key2", "key3"])
-        api_key = manager.get_key()
+        api_key = await manager.get_key()
         if api_key:
             # Use the key
             try:
                 result = make_api_call(api_key)
             except QuotaExceededError:
-                manager.mark_current_exhausted()
+                await manager.mark_current_exhausted()
                 # Retry with next key
-                api_key = manager.get_key()
+                api_key = await manager.get_key()
     """
 
     def __init__(self, service: str, api_keys: list[str]):
@@ -209,14 +220,14 @@ class ApiKeyRotationManager:
         self.api_keys = api_keys
         self._current_key: str | None = None
 
-    def get_key(self) -> str | None:
+    async def get_key(self) -> str | None:
         """Get an available API key, automatically rotating if needed.
 
         Returns:
             An available API key, or None if all keys are exhausted
         """
         # Try to get any available key
-        available_key = get_available_key(self.service, self.api_keys)
+        available_key = await get_available_key(self.service, self.api_keys)
         if available_key:
             self._current_key = available_key
             return available_key
@@ -225,7 +236,7 @@ class ApiKeyRotationManager:
         self._current_key = None
         return None
 
-    def mark_current_exhausted(
+    async def mark_current_exhausted(
         self,
         cooldown_seconds: int = _DEFAULT_COOLDOWN_SECONDS,
     ) -> None:
@@ -235,11 +246,11 @@ class ApiKeyRotationManager:
             cooldown_seconds: How long to wait before retrying this key
         """
         if self._current_key:
-            mark_key_exhausted(self.service, self._current_key, cooldown_seconds)
+            await mark_key_exhausted(self.service, self._current_key, cooldown_seconds)
             # Clear current key so next call to get_key() will pick a new one
             self._current_key = None
 
-    def mark_key_exhausted(
+    async def mark_key_exhausted(
         self,
         api_key: str,
         cooldown_seconds: int = _DEFAULT_COOLDOWN_SECONDS,
@@ -250,7 +261,7 @@ class ApiKeyRotationManager:
             api_key: The API key to mark as exhausted
             cooldown_seconds: How long to wait before retrying this key
         """
-        mark_key_exhausted(self.service, api_key, cooldown_seconds)
+        await mark_key_exhausted(self.service, api_key, cooldown_seconds)
         if self._current_key == api_key:
             self._current_key = None
 
@@ -261,16 +272,14 @@ class ApiKeyRotationManager:
         """
         self._current_key = None
 
-    @property
-    def has_available_keys(self) -> bool:
+    async def has_available_keys(self) -> bool:
         """Check if there are any available (non-exhausted) keys."""
-        return get_available_key(self.service, self.api_keys) is not None
+        return await get_available_key(self.service, self.api_keys) is not None
 
-    @property
-    def available_count(self) -> int:
+    async def available_count(self) -> int:
         """Count how many keys are currently available."""
         count = 0
         for key in self.api_keys:
-            if not is_key_exhausted(self.service, key):
+            if not await is_key_exhausted(self.service, key):
                 count += 1
         return count

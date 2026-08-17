@@ -479,5 +479,6 @@ def test_production_jwt_guard_passes_with_custom_secret():
         environment="production",
         jwt_secret_key="a" * 64,  # strong custom secret
         cors_allowed_origins=["https://aloft.app"],  # Must set specific origins in production
+        mongodb_uri="mongodb+srv://user:pass@cluster.mongodb.net/aloft",  # non-localhost
     )
     assert settings.environment == "production"

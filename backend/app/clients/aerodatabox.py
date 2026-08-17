@@ -95,10 +95,16 @@ async def get_flight(
     if not api_keys:
         raise AeroDataBoxClientError("AERODATABOX_API_KEY not configured")
 
+    # last_error is set inside the per-key loop below. If every key is
+    # skipped as pre-exhausted, the loop body never runs -- keep this
+    # defined up front so the final `raise ... from last_error` can't hit
+    # an UnboundLocalError in that case.
+    last_error: Exception | None = None
+
     # Try each available API key
     for api_key in api_keys:
         # Skip if this key is marked as exhausted (only when using multiple keys)
-        if len(api_keys) > 1 and is_key_exhausted("aerodatabox", api_key):
+        if len(api_keys) > 1 and await is_key_exhausted("aerodatabox", api_key):
             logger.debug("Skipping exhausted AeroDataBox API key")
             continue
 
@@ -107,7 +113,6 @@ async def get_flight(
             "x-rapidapi-key": api_key,
         }
 
-        last_error: Exception | None = None
         should_mark_exhausted = False
 
         for attempt in range(1, _MAX_ATTEMPTS + 1):
@@ -147,7 +152,7 @@ async def get_flight(
         # and we encountered quota errors
         if len(api_keys) > 1 and should_mark_exhausted:
             logger.warning("Marking AeroDataBox API key as exhausted after quota errors")
-            mark_key_exhausted("aerodatabox", api_key)
+            await mark_key_exhausted("aerodatabox", api_key)
         # Continue to next key if using rotation
         if len(api_keys) > 1:
             continue
@@ -157,6 +162,11 @@ async def get_flight(
             raise last_error
         break
 
+    if last_error is None:
+        raise AeroDataBoxClientError(
+            "Failed: all configured AeroDataBox API keys are currently marked "
+            "exhausted (cooling down after a previous quota error)."
+        )
     raise AeroDataBoxClientError("Failed after trying all API keys") from last_error
 
 
