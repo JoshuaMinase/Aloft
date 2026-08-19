@@ -11,7 +11,7 @@ from app.core.config import get_settings
 
 logger = logging.getLogger("aloft.clients.aviationstack")
 
-AVIATIONSTACK_BASE_URL = "http://api.aviationstack.com/v1"
+AVIATIONSTACK_BASE_URL = "https://api.aviationstack.com/v1"
 
 _RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 _MAX_ATTEMPTS = 3
@@ -248,8 +248,7 @@ async def _request(client: httpx.AsyncClient, endpoint: str, params: dict) -> li
                 if response.status_code == 429 and _is_quota_exhausted(response):
                     should_mark_exhausted = True
                     last_error = AviationStackClientError(
-                        "AviationStack monthly request quota is exhausted for this key -- "
-                        "rotating to next key."
+                        "AviationStack monthly request quota is exhausted for this key."
                     )
                     break
                 response.raise_for_status()
@@ -304,6 +303,8 @@ async def _request(client: httpx.AsyncClient, endpoint: str, params: dict) -> li
             f"{endpoint} request failed: all configured AviationStack API keys are "
             "currently marked exhausted (cooling down after a previous quota error)."
         )
+    if isinstance(last_error, AviationStackClientError):
+        raise last_error
     raise AviationStackClientError(
         f"{endpoint} request failed after trying all API keys"
     ) from last_error

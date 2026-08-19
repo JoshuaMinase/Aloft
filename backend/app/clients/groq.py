@@ -12,6 +12,13 @@ logger = logging.getLogger("aloft.clients.groq")
 
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
+# OpenRouter is OpenAI-compatible — same request/response shape as Groq.
+# Used automatically when all Groq keys are exhausted.
+# Default model mirrors the Groq default (Llama 3.3 70B) via OpenRouter's
+# free tier. Override with OPENROUTER_MODEL in .env if needed.
+OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
+OPENROUTER_DEFAULT_MODEL = "meta-llama/llama-3.3-70b-instruct:free"
+
 _RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 _MAX_ATTEMPTS = 3
 _BACKOFF_BASE_SECONDS = 1.0
@@ -88,18 +95,25 @@ async def chat_completion(
     temperature: float = 0.8,
     max_tokens: int = 400,
 ) -> str:
+    """Generate a chat completion, trying Groq first then OpenRouter as fallback.
+
+    Priority order:
+      1. Groq keys (rotated automatically when one is exhausted)
+      2. OpenRouter (used only when every Groq key has failed or is exhausted)
+
+    OpenRouter uses the same OpenAI-compatible API format so the request
+    payload and response parsing are identical — only the URL, auth header,
+    and model name differ.
+    """
     from app.core.api_key_rotation import is_key_exhausted, mark_key_exhausted
-    
+
     settings = get_settings()
     rotation_manager = _get_rotation_manager()
-    
+
     # Get API keys from rotation manager or fall back to single key
-    api_keys = rotation_manager.api_keys if rotation_manager.api_keys else (
+    groq_api_keys = rotation_manager.api_keys if rotation_manager.api_keys else (
         [settings.groq_api_key.get_secret_value()] if settings.groq_api_key else []
     )
-    
-    if not api_keys:
-        raise GroqClientError("GROQ_API_KEY is not configured")
 
     payload = {
         "model": model or settings.groq_model,
@@ -109,16 +123,14 @@ async def chat_completion(
     }
     timeout = httpx.Timeout(connect=5.0, read=30.0, write=5.0, pool=5.0)
 
-    # last_error is set inside the per-key loop below. If every key is
-    # skipped as pre-exhausted, the loop body never runs -- keep this
-    # defined up front so the final `raise ... from last_error` can't hit
-    # an UnboundLocalError in that case.
     last_error: Exception | None = None
 
-    # Try each available API key
-    for api_key in api_keys:
+    # -------------------------------------------------------------------------
+    # Phase 1: Try every Groq key
+    # -------------------------------------------------------------------------
+    for api_key in groq_api_keys:
         # Skip if this key is marked as exhausted (only when using multiple keys)
-        if len(api_keys) > 1 and await is_key_exhausted("groq", api_key):
+        if len(groq_api_keys) > 1 and await is_key_exhausted("groq", api_key):
             logger.debug("Skipping exhausted Groq API key")
             continue
 
@@ -148,7 +160,6 @@ async def chat_completion(
                         ) from exc
                     last_error = exc
                     retry_after_override = _retry_after_seconds(exc.response)
-                    # Mark as exhausted if we get 429 (rate limit/quota errors)
                     if exc.response.status_code == 429:
                         should_mark_exhausted = True
                     logger.warning(
@@ -170,16 +181,38 @@ async def chat_completion(
                     await asyncio.sleep(wait)
                     retry_after_override = None
 
-        # If we got here, this key failed all retries - mark it as exhausted if using rotation
-        # and we encountered quota/rate limit errors
-        if len(api_keys) > 1 and should_mark_exhausted:
+        if len(groq_api_keys) > 1 and should_mark_exhausted:
             logger.warning("Marking Groq API key as exhausted after quota/rate limit errors")
             await mark_key_exhausted("groq", api_key)
-        # Continue to next key if using rotation
-        if len(api_keys) > 1:
+        if len(groq_api_keys) > 1:
             continue
-        # If not using rotation and key failed, raise error  
         break
+
+    # -------------------------------------------------------------------------
+    # Phase 2: All Groq keys failed — try OpenRouter as fallback
+    # -------------------------------------------------------------------------
+    openrouter_key = (
+        settings.openrouter_api_key.get_secret_value()
+        if settings.openrouter_api_key
+        else None
+    )
+
+    if openrouter_key:
+        logger.warning(
+            "All Groq keys exhausted or failed — falling back to OpenRouter"
+        )
+        result = await _try_openrouter(
+            client, openrouter_key, messages, model, temperature, max_tokens, timeout
+        )
+        if result is not None:
+            return result
+        # OpenRouter also failed — fall through to raise the original Groq error
+        logger.warning("OpenRouter fallback also failed — no LLM backends available")
+
+    if not groq_api_keys and not openrouter_key:
+        raise GroqClientError(
+            "No LLM backend configured. Set GROQ_API_KEY and/or OPENROUTER_API_KEY in .env."
+        )
 
     if last_error is None:
         raise GroqClientError(
@@ -187,6 +220,83 @@ async def chat_completion(
             "marked exhausted (cooling down after a previous quota/rate-limit error)."
         )
     raise GroqClientError("chat_completion failed after trying all API keys") from last_error
+
+
+async def _try_openrouter(
+    client: httpx.AsyncClient,
+    api_key: str,
+    messages: list[dict[str, str]],
+    model: str | None,
+    temperature: float,
+    max_tokens: int,
+    timeout: httpx.Timeout,
+) -> str | None:
+    """Attempt a completion via OpenRouter. Returns the text on success, None on failure.
+
+    OpenRouter is OpenAI-compatible — same payload and response shape as Groq.
+    The only differences are:
+      - URL: openrouter.ai/api/v1/chat/completions
+      - Model: uses OpenRouter model IDs (e.g. meta-llama/llama-3.3-70b-instruct:free)
+      - HTTP-Referer header: recommended by OpenRouter for usage attribution
+
+    Uses the same semaphore as Groq calls so total concurrent LLM calls
+    never exceeds content_generation_max_concurrent regardless of which
+    backend is active.
+    """
+    # Use the OpenRouter model equivalent of the configured Groq model.
+    # If a specific model was requested by the caller, pass it through directly
+    # (the caller may already be using an OpenRouter-compatible model ID).
+    openrouter_model = model or OPENROUTER_DEFAULT_MODEL
+
+    payload = {
+        "model": openrouter_model,
+        "messages": messages,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+    }
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://github.com/JoshuaMinase/Aloft",
+        "X-Title": "Aloft",
+    }
+
+    async with _get_semaphore():
+        for attempt in range(1, _MAX_ATTEMPTS + 1):
+            try:
+                response = await client.post(
+                    OPENROUTER_API_URL, json=payload, headers=headers, timeout=timeout
+                )
+                response.raise_for_status()
+            except httpx.TransportError as exc:
+                logger.warning(
+                    "OpenRouter network error, attempt %d/%d: %s", attempt, _MAX_ATTEMPTS, exc
+                )
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code not in _RETRYABLE_STATUS_CODES:
+                    logger.warning(
+                        "OpenRouter non-retryable status %d: %s",
+                        exc.response.status_code,
+                        exc.response.text[:200],
+                    )
+                    return None
+                logger.warning(
+                    "OpenRouter retryable status %d, attempt %d/%d",
+                    exc.response.status_code,
+                    attempt,
+                    _MAX_ATTEMPTS,
+                )
+            else:
+                try:
+                    return _extract_text(response)
+                except GroqClientError as exc:
+                    logger.warning("OpenRouter unexpected response shape: %s", exc)
+                    return None
+
+            if attempt < _MAX_ATTEMPTS:
+                await asyncio.sleep(_BACKOFF_BASE_SECONDS * (2 ** (attempt - 1)))
+
+    return None
 
 
 def _retry_after_seconds(response: httpx.Response) -> float | None:

@@ -169,22 +169,19 @@ ruff format .
 
 ```
 aloft/
-├── backend/
-│   ├── app/
-│   │   ├── clients/      # External API integrations
-│   │   ├── core/         # Configuration, database, Redis
-│   │   ├── middleware/   # Custom middleware
-│   │   ├── models/       # Pydantic models
-│   │   ├── routers/      # FastAPI route handlers
-│   │   ├── services/     # Business logic
-│   │   └── utils/        # Utilities
-│   ├── tests/            # Test suite
-│   ├── scripts/          # Utility scripts
-│   ├── docs/             # Additional documentation
-│   └── legal_docs/       # Legal documents
-├── mobile/               # React Native mobile app
-├── web/                  # Web application
-└── docs/                 # Project documentation
+└── backend/
+    ├── app/
+    │   ├── clients/      # External API integrations
+    │   ├── core/         # Configuration, database, Redis
+    │   ├── middleware/   # Custom middleware
+    │   ├── models/       # Pydantic models
+    │   ├── routers/      # FastAPI route handlers
+    │   ├── services/     # Business logic
+    │   └── utils/        # Utilities
+    ├── tests/            # Test suite
+    ├── scripts/          # Utility scripts
+    ├── music_assets/     # Background music files
+    └── legal_docs/       # Legal documents
 ```
 
 ## Security

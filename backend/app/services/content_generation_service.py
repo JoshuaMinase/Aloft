@@ -29,8 +29,8 @@ class PoiContentResult(BaseModel):
     images_found: int
     # None  → image fetching was not attempted or POI itself was missing
     # ""    → attempted, found nothing from either source
-    # "wikipedia" | "openverse" → source that provided images
-    image_source: Literal["wikipedia", "openverse", ""] | None = None
+    # "wikipedia" | "openverse" | "cached" → source that provided images
+    image_source: Literal["wikipedia", "openverse", "cached", ""] | None = None
     error: str | None = None
 
 

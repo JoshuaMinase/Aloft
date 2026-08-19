@@ -122,6 +122,16 @@ def _apply_fade(audio: np.ndarray, fade_ms: int, sample_rate: int) -> np.ndarray
 
 
 def _detect_format(data: bytes) -> str:
+    """Detect audio format from magic bytes.
+
+    Returns the file extension to use for temporary files during mixing.
+    soundfile can handle WAV, FLAC, OGG, and most other formats natively.
+    MP3 is the default fallback since ElevenLabs outputs MP3.
+    """
     if data[:4] == b"RIFF":
         return "wav"
+    if data[:4] == b"fLaC":
+        return "flac"
+    if data[:4] == b"OggS":
+        return "ogg"
     return "mp3"

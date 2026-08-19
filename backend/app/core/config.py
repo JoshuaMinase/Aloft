@@ -115,9 +115,23 @@ class Settings(BaseSettings):
     # Default voice: "Bella" -- free tier voice for ElevenLabs.
     # Find other voice IDs at elevenlabs.io/voice-lab or GET /v1/voices.
     elevenlabs_voice_id: str = "EXAVITQu4vr4xnSDxMaL"
+    # ElevenLabs output format. mp3_22050_64 is the recommended default:
+    # 22kHz / 64kbps is transparent quality for speech narration and uses
+    # half the bandwidth/storage of mp3_44100_128. Switch to mp3_44100_128
+    # or mp3_44100_192 if you need broadcast-quality output.
+    # Valid values: mp3_22050_32, mp3_22050_64, mp3_44100_64, mp3_44100_128, mp3_44100_192
+    elevenlabs_output_format: str = "mp3_22050_64"
     audio_storage_dir: str = "./audio_storage"
     aviationstack_api_key: str | None = None
     aerodatabox_api_key: str | None = None
+
+    # ---------------------------------------------------------------------------
+    # OpenRouter (optional — OpenAI-compatible gateway to 100+ LLMs)
+    # ---------------------------------------------------------------------------
+    # Drop-in fallback/alternative to Groq. Supports GPT-4, Claude, Llama,
+    # Mistral, and 100+ other models through one OpenAI-compatible endpoint.
+    # Free tier available. Get your key at: https://openrouter.ai/keys
+    openrouter_api_key: SecretStr | None = None
 
     @property
     def groq_api_keys(self) -> list[str]:

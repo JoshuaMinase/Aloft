@@ -235,6 +235,7 @@ class TestGroqClientRotation:
             mock_settings.groq_api_keys = ["key1", "key2"]
             mock_settings.groq_model = "test-model"
             mock_settings.content_generation_max_concurrent = 3
+            mock_settings.openrouter_api_key = None  # disable OpenRouter fallback for this test
 
             with patch("app.clients.groq.get_settings", return_value=mock_settings):
                 mock_client = AsyncMock()

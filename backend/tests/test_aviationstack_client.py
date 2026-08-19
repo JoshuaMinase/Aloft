@@ -93,8 +93,16 @@ async def test_get_airport_raises_when_not_found():
 
 
 @pytest.mark.asyncio
-async def test_quota_exhausted_429_fails_immediately_without_retrying():
+async def test_quota_exhausted_429_fails_immediately_without_retrying(monkeypatch):
     quota_response = {"error": {"code": "usage_limit_reached", "message": "..."}}
+
+    # Force a single API key so the call_count assertion below is deterministic
+    # regardless of how many keys are configured in .env.
+    monkeypatch.setenv("AVIATIONSTACK_API_KEY", "test-single-key")
+    from app.core.config import get_settings
+    get_settings.cache_clear()
+    from app.clients import aviationstack as av_module
+    av_module.reset_rotation_manager_cache()
 
     async with httpx.AsyncClient() as client:
         with respx.mock:
